@@ -49,6 +49,8 @@ public class GenericController<TEntity, TDto, TKey> : GenericController<$Entity$
         Summary = "Retrieve by id",
         Description = "Returns a single record by its unique identifier",
         OperationId = "Show")]
+    [ProducesResponseType(typeof($TDto$), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public virtual async Task<ActionResult<$TDto$>> Show($TKey$ id)
     {
         var result = await _service.GetByIdAsync(id);
@@ -61,6 +63,7 @@ public class GenericController<TEntity, TDto, TKey> : GenericController<$Entity$
         Summary = "Paginated list",
         Description = "Returns a paginated list of records",
         OperationId = "Index")]
+    [ProducesResponseType(typeof(PaginatedResult<$TDto$>), StatusCodes.Status200OK)]
     public virtual async Task<ActionResult<PaginatedResult<$TDto$>>> Index(
         [FromQuery] int page = 1,
         [FromQuery] int rows = 20)
@@ -75,6 +78,8 @@ public class GenericController<TEntity, TDto, TKey> : GenericController<$Entity$
         Summary = "Create new",
         Description = "Creates a new record from the provided payload",
         OperationId = "Store")]
+    [ProducesResponseType(typeof($TDto$), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public virtual async Task<ActionResult<$TDto$>> Store([FromBody] $TDto$ item)
     {
         var result = await _service.CreateAsync(item);
@@ -87,6 +92,9 @@ public class GenericController<TEntity, TDto, TKey> : GenericController<$Entity$
         Summary = "Update by id",
         Description = "Updates an existing record identified by its id with the provided payload",
         OperationId = "Update")]
+    [ProducesResponseType(typeof($TDto$), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public virtual async Task<ActionResult<$TDto$>> Update($TKey$ id, [FromBody] $TDto$ item)
     {
         var result = await _service.UpdateAsync(id, item);
@@ -99,6 +107,8 @@ public class GenericController<TEntity, TDto, TKey> : GenericController<$Entity$
         Summary = "Delete by id",
         Description = "Deletes a record by its unique identifier",
         OperationId = "Destroy")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public virtual async Task<IActionResult> Destroy($TKey$ id)
     {
         await _service.DeleteAsync(id);

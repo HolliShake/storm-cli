@@ -236,6 +236,21 @@ class Interpreter(Parser):
             f = f.next
         return None
 
+    def _get_fk_columns(self, table_node):
+        """Return list of (field_name, ref_table, ref_pk_type) for FK columns."""
+        fks = []
+        table_names = set(self.tables.keys())
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip('?')
+            if type_name in table_names:
+                field_name = self._pascal_case(f.a.value)
+                ref_pk_type = self._get_pk_type(self.tables[type_name])
+                fks.append((field_name, type_name, ref_pk_type))
+            f = f.next
+        return fks
+
     def _get_pk_type(self, table_node):
         pk = self._get_pk_field(table_node)
         if pk is None:
@@ -385,37 +400,88 @@ class Interpreter(Parser):
 
     # ── template generators ──────────────────────────────────────────
 
-    def _generate_iservice(self, table_name, namespace, pk_type, iservice_ns, model_ns, dto_ns):
+    def _generate_iservice(self, table_name, namespace, pk_type, iservice_ns, model_ns, dto_ns, pagination_ns):
+        table_node = self.tables[table_name]
+        fks = self._get_fk_columns(table_node)
+        extra_methods = ""
+        for fk_name, fk_table, fk_pk_type in fks:
+            lower_fk = fk_name[0].lower() + fk_name[1:]
+            extra_methods += f"\n    public Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{fk_name}Async({fk_pk_type} {lower_fk}Id, int page = 1, int rows = 20);"
+
+        using_pagination = f"using {pagination_ns};\n" if fks else ""
+
         return f"""\
-using {iservice_ns};
+{using_pagination}using {iservice_ns};
 using {model_ns};
 using {dto_ns};
 
 namespace {namespace};
 
 public interface I{table_name}Service : IGenericService<{table_name}, {table_name}ResponseDto, {pk_type}>
-{{
+{{{extra_methods}
 }}
 """
 
-    def _generate_service(self, table_name, namespace, pk_type, service_ns, iservice_ns, model_ns, dto_ns):
+    def _generate_service(self, table_name, namespace, pk_type, service_ns, iservice_ns, model_ns, dto_ns, pagination_ns):
+        table_node = self.tables[table_name]
+        fks = self._get_fk_columns(table_node)
+        extra_methods = ""
+        for fk_name, fk_table, fk_pk_type in fks:
+            lower_fk = fk_name[0].lower() + fk_name[1:]
+            extra_methods += f"""
+    public async Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{fk_name}Async({fk_pk_type} {lower_fk}Id, int page = 1, int rows = 20)
+    {{
+        var query = _context.Set<{table_name}>().Where(e => e.{fk_name}Id == {lower_fk}Id);
+        return await query
+            .ProjectTo<{table_name}ResponseDto>(_mapper.ConfigurationProvider)
+            .PaginateAsync(page, rows);
+    }}
+"""
+
+        using_pagination = f"using {pagination_ns};\n" if fks else ""
+
         return f"""\
-using {service_ns};
+{using_pagination}using {service_ns};
 using {iservice_ns};
 using {model_ns};
 using {dto_ns};
 using Microsoft.EntityFrameworkCore;
 using AutoMapper;
+using AutoMapper.QueryableExtensions;
 
 namespace {namespace};
 
 public class {table_name}Service : GenericService<{table_name}, {table_name}ResponseDto, {pk_type}>, I{table_name}Service
 {{
     public {table_name}Service(DbContext context, IMapper mapper) : base(context, mapper) {{ }}
+{extra_methods}
 }}
 """
 
     def _generate_controller(self, table_name, namespace, pk_type, controller_ns, iservice_ns, dto_ns, pagination_ns, model_ns):
+        table_node = self.tables[table_name]
+        fks = self._get_fk_columns(table_node)
+
+        extra_endpoints = ""
+        for fk_name, fk_table, fk_pk_type in fks:
+            lower_fk = fk_name[0].lower() + fk_name[1:]
+            extra_endpoints += f"""
+    [HttpGet("by-{fk_table.lower()}/{{{lower_fk}Id}}")]
+    [SwaggerOperation(
+        Tags = new[] {{ "{table_name}" }},
+        Summary = "Paginated list by {fk_table}",
+        Description = "Returns a paginated list of {table_name} records filtered by {fk_table}",
+        OperationId = "{table_name}IndexBy{fk_name}")]
+    [ProducesResponseType(typeof(PaginatedResult<{table_name}ResponseDto>), StatusCodes.Status200OK)]
+    public virtual async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> IndexBy{fk_name}({fk_pk_type} {lower_fk}Id,
+        [FromQuery] int page = 1,
+        [FromQuery] int rows = 20)
+    {{
+        var result = await ((I{table_name}Service)_service).PaginateBy{fk_name}Async({lower_fk}Id, page, rows);
+        return Ok(result);
+    }}
+"""
+
         return f"""\
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
@@ -440,6 +506,8 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
         Summary = "Retrieve by id",
         Description = "Returns a single {table_name} record by its unique identifier",
         OperationId = "{table_name}Show")]
+    [ProducesResponseType(typeof({table_name}ResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public override async Task<ActionResult<{table_name}ResponseDto>> Show({pk_type} id)
     {{
         var result = await _service.GetByIdAsync(id);
@@ -452,6 +520,7 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
         Summary = "Paginated list",
         Description = "Returns a paginated list of {table_name} records",
         OperationId = "{table_name}Index")]
+    [ProducesResponseType(typeof(PaginatedResult<{table_name}ResponseDto>), StatusCodes.Status200OK)]
     public override async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> Index(
         [FromQuery] int page = 1,
         [FromQuery] int rows = 20)
@@ -459,13 +528,15 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
         var result = await _service.PaginateAsync(page, rows);
         return Ok(result);
     }}
-
+{extra_endpoints}
     [HttpPost]
     [SwaggerOperation(
         Tags = new[] {{ "{table_name}" }},
         Summary = "Create new",
         Description = "Creates a new {table_name} record from the provided payload",
         OperationId = "{table_name}Store")]
+    [ProducesResponseType(typeof({table_name}ResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public override async Task<ActionResult<{table_name}ResponseDto>> Store([FromBody] {table_name}RequestDto item)
     {{
         var result = await _service.CreateAsync(item);
@@ -478,6 +549,9 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
         Summary = "Update by id",
         Description = "Updates an existing {table_name} record identified by its id with the provided payload",
         OperationId = "{table_name}Update")]
+    [ProducesResponseType(typeof({table_name}ResponseDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public override async Task<ActionResult<{table_name}ResponseDto>> Update({pk_type} id, [FromBody] {table_name}RequestDto item)
     {{
         var result = await _service.UpdateAsync(id, item);
@@ -490,6 +564,8 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
         Summary = "Delete by id",
         Description = "Deletes a {table_name} record by its unique identifier",
         OperationId = "{table_name}Destroy")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public override async Task<IActionResult> Destroy({pk_type} id)
     {{
         await _service.DeleteAsync(id);
@@ -497,6 +573,7 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
     }}
 }}
 """
+
 
     def _generate_mapper(self, table_name, namespace, model_ns, dto_ns):
         vars_dict = {
@@ -575,10 +652,10 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
             simp_code = self._generate_response_simplified_dto(node, dto_ns)
             self._write_file(output_dir, config["DtoPath"], f"{name}ResponseSimplifiedDto.cs", simp_code)
 
-            isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, dto_ns)
+            isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, dto_ns, pagination_ns)
             self._write_file(output_dir, config.get("IServicesPath", config.get("IServicePath", ".")), f"I{name}Service.cs", isvc_code)
 
-            svc_code = self._generate_service(name, service_ns, pk_type, service_ns, iservice_ns, model_ns, dto_ns)
+            svc_code = self._generate_service(name, service_ns, pk_type, service_ns, iservice_ns, model_ns, dto_ns, pagination_ns)
             self._write_file(output_dir, config["ServicePath"], f"{name}Service.cs", svc_code)
 
             ctrl_code = self._generate_controller(name, controller_ns, pk_type, controller_ns, iservice_ns, dto_ns, pagination_ns, model_ns)
