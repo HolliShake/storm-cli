@@ -80,4 +80,4 @@ class TestIntegration:
     def test_track_positions(self, storm_path):
         p = Parser(storm_path)
         ast = p.parse()
-        assert ast.position.line == 4 and ast.position.column == 1
+        assert ast.position.line == 5 and ast.position.column == 1

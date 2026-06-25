@@ -323,8 +323,50 @@ def init_laravel_project(config, project_dir):
     write_config(config, project_dir)
 
 
+BANNER = r"""
+███████ ████████  ██████  ██████  ███    ███ 
+██         ██    ██    ██ ██   ██ ████  ████ 
+███████    ██    ██    ██ ██████  ██ ████ ██ 
+     ██    ██    ██    ██ ██   ██ ██  ██  ██ 
+███████    ██     ██████  ██   ██ ██      ██ 
+                                             
+                                             
+             ██████ ██      ██               
+            ██      ██      ██               
+            ██      ██      ██               
+            ██      ██      ██               
+             ██████ ███████ ██               
+                                             
+                                             
+"""
+
+YEL = "\033[33m"
+RST = "\033[0m"
+
+HELP_BANNER = f"""{YEL}
+███████ ████████  ██████  ██████  ███    ███ 
+██         ██    ██    ██ ██   ██ ████  ████ 
+███████    ██    ██    ██ ██████  ██ ████ ██ 
+     ██    ██    ██    ██ ██   ██ ██  ██  ██ 
+███████    ██     ██████  ██   ██ ██      ██ 
+                                             
+                                             
+             ██████ ██      ██               
+            ██      ██      ██               
+            ██      ██      ██               
+            ██      ██      ██               
+             ██████ ███████ ██               
+                                             
+                                             
+  API Starter Kit -- schema to source{RST}
+"""
+
+
 def main():
-    parser = argparse.ArgumentParser(description="API Starter Kit")
+    parser = argparse.ArgumentParser(
+        description=HELP_BANNER,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
 
     parser.add_argument(
         "--init", "-i",
@@ -353,6 +395,7 @@ def main():
     args = parser.parse_args()
 
     if args.init:
+        print(YEL + BANNER + RST)
         template = args.template or template_choices[0]
         project_name = args.name or os.path.basename(os.getcwd())
         print(f"Initializing project with template: {template}")
@@ -383,6 +426,7 @@ def main():
             print("  [--] schema.storm already exists, skipped")
 
     elif args.generate:
+        print(YEL + BANNER + RST)
         config_path = "storm.config.json"
         schema_path = args.name or "schema.storm"
 
