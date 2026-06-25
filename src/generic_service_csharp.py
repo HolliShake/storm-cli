@@ -56,7 +56,7 @@ public class GenericService<TEntity, TDto, TKey> : IGenericService<TEntity, TDto
 
     public virtual async Task<TDto> GetByIdAsync(TKey id)
     {
-        var entity = await _context.Set<TEntity>().FindAsync(id);
+        var entity = await _table.FindAsync(id);
         if (entity == null)
             throw new KeyNotFoundException($"{typeof(TEntity).Name} with id {id} not found");
         return _mapper.Map<TDto>(entity);
@@ -64,7 +64,7 @@ public class GenericService<TEntity, TDto, TKey> : IGenericService<TEntity, TDto
 
     public virtual async Task<PaginatedResult<TDto>> PaginateAsync(int page = 1, int rows = 20)
     {
-        var query = _context.Set<TEntity>().AsQueryable();
+        var query = _table.AsQueryable();
         var totalCount = await query.CountAsync();
         var items = await query
             .Skip((page - 1) * rows)
@@ -83,14 +83,14 @@ public class GenericService<TEntity, TDto, TKey> : IGenericService<TEntity, TDto
     public virtual async Task<TDto> CreateAsync(TDto item)
     {
         var entity = _mapper.Map<TEntity>(item);
-        _context.Set<TEntity>().Add(entity);
+        _table.Add(entity);
         await _context.SaveChangesAsync();
         return _mapper.Map<TDto>(entity);
     }
 
     public virtual async Task<TDto> UpdateAsync(TKey id, TDto item)
     {
-        var entity = await _context.Set<TEntity>().FindAsync(id);
+        var entity = await _table.FindAsync(id);
         if (entity == null)
             throw new KeyNotFoundException($"{typeof(TEntity).Name} with id {id} not found");
         _mapper.Map(item, entity);
@@ -100,10 +100,10 @@ public class GenericService<TEntity, TDto, TKey> : IGenericService<TEntity, TDto
 
     public virtual async Task DeleteAsync(TKey id)
     {
-        var entity = await _context.Set<TEntity>().FindAsync(id);
+        var entity = await _table.FindAsync(id);
         if (entity == null)
             throw new KeyNotFoundException($"{typeof(TEntity).Name} with id {id} not found");
-        _context.Set<TEntity>().Remove(entity);
+        _table.Remove(entity);
         await _context.SaveChangesAsync();
     }
 }

@@ -29,7 +29,7 @@ public class $$Entity$$MappingProfile : Profile
     {
         CreateMap<$$TRequestDto$$, $$Entity$$>();
         CreateMap<$$Entity$$, $$TResponseDto$$>();
-        CreateMap<$$Entity$$, $$TResponseDto$$Simplified>();
+        CreateMap<$$Entity$$, $$TResponseDtoSimplified$$>();
     }
 }
 """

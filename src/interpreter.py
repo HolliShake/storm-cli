@@ -295,21 +295,61 @@ class Interpreter(Parser):
 
     # ── model ────────────────────────────────────────────────────────
 
+    # Properties already provided by IdentityUser / IdentityUser<TKey>
+    _IDENTITY_USER_FIELDS = {
+        "Id", "UserName", "NormalizedUserName", "Email", "NormalizedEmail",
+        "EmailConfirmed", "PasswordHash", "SecurityStamp", "ConcurrencyStamp",
+        "PhoneNumber", "PhoneNumberConfirmed", "TwoFactorEnabled",
+        "LockoutEnd", "LockoutEnabled", "AccessFailedCount",
+    }
+
     def _generate_model(self, table_node, namespace):
         name = table_node.a.value
         pk = self._get_pk_field(table_node)
         pk_name = self._pascal_case(pk.a.value) if pk else "Id"
-        buf = [f"namespace {namespace};", "", f"public class {name}", "{"]
+
+        is_user = (name == "User")
+        identity_base = ""
+        identity_using = ""
+        identity_skip_fields = set()
+
+        if is_user:
+            # Require PK type to be uuid
+            pk_type_storm = pk.b.value.rstrip("?")
+            if pk_type_storm != "uuid":
+                raise_error(
+                    self.file_path, self.file_data,
+                    f"User table primary key must be 'uuid', got '{pk_type_storm}'",
+                    pk.position,
+                )
+            identity_base = " : IdentityUser<Guid>"
+            identity_using = "using Microsoft.AspNetCore.Identity;\n\n"
+            identity_skip_fields = self._IDENTITY_USER_FIELDS
+
+        # collect all field names first to detect FK-id collisions
+        all_names = set()
+        f = table_node.b
+        while f:
+            all_names.add(self._pascal_case(f.a.value))
+            f = f.next
+
+        buf = [identity_using + f"namespace {namespace};", "", f"public class {name}{identity_base}", "{"]
 
         f = table_node.b
         while f:
             field_name = self._pascal_case(f.a.value)
             cs_type = self._field_csharp_type(f)
 
+            # skip fields already provided by IdentityUser
+            if is_user and field_name in identity_skip_fields:
+                f = f.next
+                continue
+
             if isinstance(cs_type, tuple):
                 ref_pk_type, ref_name = cs_type
                 fk_name = f"{field_name}Id"
-                buf.append(f"    public {ref_pk_type} {fk_name} {{ get; set; }}")
+                if fk_name not in all_names and fk_name not in identity_skip_fields:
+                    buf.append(f"    public {ref_pk_type} {fk_name} {{ get; set; }}")
                 buf.append(f"    public {ref_name}? {field_name} {{ get; set; }}")
             else:
                 buf.append(f"    public {cs_type} {field_name} {{ get; set; }}")
@@ -326,6 +366,14 @@ class Interpreter(Parser):
         pk = self._get_pk_field(table_node)
         pk_name = self._pascal_case(pk.a.value) if pk else "Id"
         dto_name = f"{name}RequestDto"
+
+        # collect field names to detect FK-id collisions
+        all_names = set()
+        fn = table_node.b
+        while fn:
+            all_names.add(self._pascal_case(fn.a.value))
+            fn = fn.next
+
         buf = [f"namespace {namespace};", "", f"public class {dto_name}", "{"]
 
         f = table_node.b
@@ -337,7 +385,9 @@ class Interpreter(Parser):
             cs_type = self._field_csharp_type(f)
             if isinstance(cs_type, tuple):
                 ref_pk_type, _ = cs_type
-                buf.append(f"    public {ref_pk_type} {field_name}Id {{ get; set; }}")
+                fk_name = f"{field_name}Id"
+                if fk_name not in all_names:
+                    buf.append(f"    public {ref_pk_type} {fk_name} {{ get; set; }}")
             else:
                 buf.append(f"    public {cs_type} {field_name} {{ get; set; }}")
             f = f.next
@@ -348,6 +398,14 @@ class Interpreter(Parser):
     def _generate_response_dto(self, table_node, namespace):
         name = table_node.a.value
         dto_name = f"{name}ResponseDto"
+
+        # collect field names to detect FK-id collisions
+        all_names = set()
+        fn = table_node.b
+        while fn:
+            all_names.add(self._pascal_case(fn.a.value))
+            fn = fn.next
+
         buf = [f"namespace {namespace};", "", f"public class {dto_name}", "{"]
 
         f = table_node.b
@@ -356,7 +414,9 @@ class Interpreter(Parser):
             cs_type = self._field_csharp_type(f)
             if isinstance(cs_type, tuple):
                 ref_pk_type, _ = cs_type
-                buf.append(f"    public {ref_pk_type} {field_name}Id {{ get; set; }}")
+                fk_name = f"{field_name}Id"
+                if fk_name not in all_names:
+                    buf.append(f"    public {ref_pk_type} {fk_name} {{ get; set; }}")
             else:
                 buf.append(f"    public {cs_type} {field_name} {{ get; set; }}")
             f = f.next
@@ -431,7 +491,7 @@ public interface I{table_name}Service : IGenericService<{table_name}, {table_nam
             extra_methods += f"""
     public async Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{fk_name}Async({fk_pk_type} {lower_fk}Id, int page = 1, int rows = 20)
     {{
-        var query = _context.Set<{table_name}>().Where(e => e.{fk_name}Id == {lower_fk}Id);
+        var query = _table.Where(e => e.{fk_name}Id == {lower_fk}Id);
         return await query
             .ProjectTo<{table_name}ResponseDto>(_mapper.ConfigurationProvider)
             .PaginateAsync(page, rows);
@@ -583,8 +643,32 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
             "Entity": table_name,
             "TRequestDto": f"{table_name}RequestDto",
             "TResponseDto": f"{table_name}ResponseDto",
+            "TResponseDtoSimplified": f"{table_name}ResponseSimplifiedDto",
         }
         return self._substitute_template(GENERIC_MAPPER_TEMPLATE_CSHARP, vars_dict)
+
+    # ── dbcontext ───────────────────────────────────────────────────
+
+    def _generate_appdbcontext(self, namespace, model_ns):
+        usings = f"""\
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
+using {model_ns};
+"""
+        buf = [usings, f"namespace {namespace};", "", "public class AppDbContext : IdentityDbContext", "{"]
+        buf.append("    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }")
+        buf.append("")
+
+        for name in self._ordered:
+            buf.append(f"    public DbSet<{name}> {name}s {{ get; set; }} = null!;")
+
+        buf.append("")
+        buf.append("    protected override void OnModelCreating(ModelBuilder builder)")
+        buf.append("    {")
+        buf.append("        base.OnModelCreating(builder);")
+        buf.append("    }")
+        buf.append("}")
+        return "\n".join(buf)
 
     # ── write ────────────────────────────────────────────────────────
 
@@ -608,7 +692,7 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
         service_ns = ns.get("ServicePath", project_name)
         mapper_ns = ns.get("MapperPath", project_name)
         enum_ns = ns.get("EnumPath", project_name)
-        pagination_ns = ns.get("PaginationPath", project_name)
+        pagination_ns = f"{dto_ns}.Shared"
 
         print("\nGenerating code...")
 
@@ -633,35 +717,42 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
         self._write_file(output_dir, config.get("IServicesPath", config.get("IServicePath", ".")), "IGenericService.cs", isvc_base)
         self._write_file(output_dir, config["ServicePath"], "GenericService.cs", svc_base)
         self._write_file(output_dir, config["ControllerPath"], "GenericController.cs", ctrl_base)
-        self._write_file(output_dir, config.get("PaginationPath", "."), "PaginatedResult.cs", pag_base)
+        self._write_file(output_dir, config["DtoPath"] + "/Shared", "PaginatedResult.cs", pag_base)
+
+        # ── AppDbContext ──────────────────────────────────────────────
+        dbcontext_ns = ns.get("DbContextPath", project_name)
+        dbcontext_code = self._generate_appdbcontext(dbcontext_ns, model_ns)
+        self._write_file(output_dir, config["DbContextPath"], "AppDbContext.cs", dbcontext_code)
 
         # ── per-table files ──────────────────────────────────────────
         for name in self._ordered:
             node = self.tables[name]
             pk_type = self._get_pk_type(node)
+            table_dto_ns = f"{dto_ns}.{name}Dto"
+            table_dto_path = config["DtoPath"] + f"/{name}Dto"
 
             model_code = self._generate_model(node, model_ns)
             self._write_file(output_dir, config["ModelPath"], f"{name}.cs", model_code)
 
-            req_code = self._generate_request_dto(node, dto_ns)
-            self._write_file(output_dir, config["DtoPath"], f"{name}RequestDto.cs", req_code)
+            req_code = self._generate_request_dto(node, table_dto_ns)
+            self._write_file(output_dir, table_dto_path, f"{name}RequestDto.cs", req_code)
 
-            res_code = self._generate_response_dto(node, dto_ns)
-            self._write_file(output_dir, config["DtoPath"], f"{name}ResponseDto.cs", res_code)
+            res_code = self._generate_response_dto(node, table_dto_ns)
+            self._write_file(output_dir, table_dto_path, f"{name}ResponseDto.cs", res_code)
 
-            simp_code = self._generate_response_simplified_dto(node, dto_ns)
-            self._write_file(output_dir, config["DtoPath"], f"{name}ResponseSimplifiedDto.cs", simp_code)
+            simp_code = self._generate_response_simplified_dto(node, table_dto_ns)
+            self._write_file(output_dir, table_dto_path, f"{name}ResponseSimplifiedDto.cs", simp_code)
 
-            isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, dto_ns, pagination_ns)
+            isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, table_dto_ns, pagination_ns)
             self._write_file(output_dir, config.get("IServicesPath", config.get("IServicePath", ".")), f"I{name}Service.cs", isvc_code)
 
-            svc_code = self._generate_service(name, service_ns, pk_type, service_ns, iservice_ns, model_ns, dto_ns, pagination_ns)
+            svc_code = self._generate_service(name, service_ns, pk_type, service_ns, iservice_ns, model_ns, table_dto_ns, pagination_ns)
             self._write_file(output_dir, config["ServicePath"], f"{name}Service.cs", svc_code)
 
-            ctrl_code = self._generate_controller(name, controller_ns, pk_type, controller_ns, iservice_ns, dto_ns, pagination_ns, model_ns)
+            ctrl_code = self._generate_controller(name, controller_ns, pk_type, controller_ns, iservice_ns, table_dto_ns, pagination_ns, model_ns)
             self._write_file(output_dir, config["ControllerPath"], f"{name}Controller.cs", ctrl_code)
 
-            map_code = self._generate_mapper(name, mapper_ns, model_ns, dto_ns)
+            map_code = self._generate_mapper(name, mapper_ns, model_ns, table_dto_ns)
             self._write_file(output_dir, config["MapperPath"], f"{name}MappingProfile.cs", map_code)
 
         # ── per-enum files ───────────────────────────────────────────
