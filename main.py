@@ -101,6 +101,7 @@ CONFIGS = {
         "IServicePath": "./app/IServices",
         "ServicePath": "./app/Services",
         "MapperPath": "./app/Mappers",
+        "MigrationsPath": "./database/migrations",
     },
 }
 
@@ -163,9 +164,12 @@ NUGET_SIMPLE = [
     ("Microsoft.EntityFrameworkCore", True),
     ("Microsoft.EntityFrameworkCore.SqlServer", True),
     ("Microsoft.EntityFrameworkCore.Design", True),
+    ("Microsoft.AspNetCore.Identity.EntityFrameworkCore", True),
     ("AutoMapper", False),
     ("Newtonsoft.Json", False),
+    ("Scrutor", False),
     ("Swashbuckle.AspNetCore", False),
+    ("Scalar.AspNetCore", False),
 ]
 
 NUGET_CLEAN_ARCH = {
@@ -175,11 +179,14 @@ NUGET_CLEAN_ARCH = {
     "INFRASTRUCTURE": [
         ("Microsoft.EntityFrameworkCore", True),
         ("Microsoft.EntityFrameworkCore.SqlServer", True),
+        ("Microsoft.AspNetCore.Identity.EntityFrameworkCore", True),
     ],
     "API": [
         ("Microsoft.EntityFrameworkCore.Design", True),
         ("Newtonsoft.Json", False),
+        ("Scrutor", False),
         ("Swashbuckle.AspNetCore", False),
+        ("Scalar.AspNetCore", False),
     ],
 }
 
@@ -192,7 +199,7 @@ def install_nuget_packages(project_csproj, packages, sdk_version, cwd=None):
 
 def init_dotnet_project(config, project_dir, name):
     print("\nCreating dotnet webapi project...")
-    run_dotnet(["new", "webapi", "-n", name, "-o", project_dir])
+    run_dotnet(["new", "webapi", "-n", name, "-o", project_dir, "--force"])
     create_config_dirs(config, project_dir)
 
     sdk_version = get_dotnet_version()
@@ -205,7 +212,6 @@ def init_dotnet_project(config, project_dir, name):
 
 def init_dotnet_clean_arch_project(config, solution_dir, name):
     print("\nCreating clean architecture solution...")
-    os.makedirs(solution_dir, exist_ok=True)
 
     layers = [
         ("DOMAIN", "classlib"),
@@ -215,9 +221,9 @@ def init_dotnet_clean_arch_project(config, solution_dir, name):
     ]
 
     for layer, project_type in layers:
-        run_dotnet(["new", project_type, "-n", layer, "-o", layer], cwd=solution_dir)
+        run_dotnet(["new", project_type, "-n", layer, "-o", layer, "--force"], cwd=solution_dir)
 
-    run_dotnet(["new", "sln", "-n", name], cwd=solution_dir)
+    run_dotnet(["new", "sln", "-n", name, "--force"], cwd=solution_dir)
 
     sln_name = f"{name}.sln"
     for layer, _ in layers:
@@ -245,7 +251,7 @@ COMPOSER_PACKAGES = [
 ]
 
 
-def init_laravel_project(config, project_dir, name):
+def init_laravel_project(config, project_dir):
     print("\nCreating Laravel project...")
     run_composer(["create-project", "laravel/laravel", project_dir, "--prefer-dist"])
     create_config_dirs(config, project_dir)
@@ -293,11 +299,11 @@ def main():
         config = CONFIGS[template]
 
         if template == Template.DOTNETCSHARP.value:
-            init_dotnet_project(config, project_name, project_name)
+            init_dotnet_project(config, ".", project_name)
         elif template == Template.DOTNETCSHARP_CLEANARCHITECTURE.value:
-            init_dotnet_clean_arch_project(config, project_name, project_name)
+            init_dotnet_clean_arch_project(config, ".", project_name)
         elif template == Template.LARAVELPHP.value:
-            init_laravel_project(config, project_name, project_name)
+            init_laravel_project(config, ".")
     else:
         parser.print_help()
 
