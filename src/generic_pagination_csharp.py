@@ -9,7 +9,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 
-namespace $config_pagination_path$;
+namespace $$config_pagination_path$$;
 
 public class PaginatedResult<T>
 {

@@ -4,12 +4,12 @@
 GENERIC_CONTROLLER_CSHARP = """\
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
-using $config_iservice_path$;
-using $config_dto_path$;
-using $config_mapper_path$;
-using $config_pagination_path$;
+using $$config_iservice_path$$;
+using $$config_dto_path$$;
+using $$config_mapper_path$$;
+using $$config_pagination_path$$;
 
-namespace $config_controller_path$;
+namespace $$config_controller_path$$;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -30,12 +30,12 @@ GENERIC_CONTROLLER_TEMPLATE_CSHARP = """\
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Swashbuckle.AspNetCore.Annotations;
-using $config_iservice_path$;
-using $config_dto_path$;
-using $config_mapper_path$;
-using $config_pagination_path$;
+using $$config_iservice_path$$;
+using $$config_dto_path$$;
+using $$config_mapper_path$$;
+using $$config_pagination_path$$;
 
-namespace $config_controller_path$;
+namespace $$config_controller_path$$;
 
 [ApiController]
 [Route("api/[controller]")]
