@@ -10,14 +10,15 @@ using $$config_pagination_path$$;
 
 namespace $$config_iservice_path$$;
 
-public interface IGenericService<TEntity, TDto, TKey>
+public interface IGenericService<TEntity, TDto, TRequestDto, TKey>
     where TEntity : class
     where TDto : class
+    where TRequestDto : class
 {
     public Task<TDto> GetByIdAsync(TKey id);
     public Task<PaginatedResult<TDto>> PaginateAsync(int page = 1, int rows = 20);
-    public Task<TDto> CreateAsync(TDto item);
-    public Task<TDto> UpdateAsync(TKey id, TDto item);
+    public Task<TDto> CreateAsync(TRequestDto item);
+    public Task<TDto> UpdateAsync(TKey id, TRequestDto item);
     public Task DeleteAsync(TKey id);
 }
 """
@@ -39,9 +40,10 @@ using $$config_pagination_path$$;
 
 namespace $$config_service_path$$;
 
-public class GenericService<TEntity, TDto, TKey> : IGenericService<TEntity, TDto, TKey>
+public class GenericService<TEntity, TDto, TRequestDto, TKey> : IGenericService<TEntity, TDto, TRequestDto, TKey>
     where TEntity : class
     where TDto : class
+    where TRequestDto : class
 {
     protected readonly DbContext _context;
     protected readonly DbSet<TEntity> _table;
@@ -80,7 +82,7 @@ public class GenericService<TEntity, TDto, TKey> : IGenericService<TEntity, TDto
         };
     }
 
-    public virtual async Task<TDto> CreateAsync(TDto item)
+    public virtual async Task<TDto> CreateAsync(TRequestDto item)
     {
         var entity = _mapper.Map<TEntity>(item);
         _table.Add(entity);
@@ -88,7 +90,7 @@ public class GenericService<TEntity, TDto, TKey> : IGenericService<TEntity, TDto
         return _mapper.Map<TDto>(entity);
     }
 
-    public virtual async Task<TDto> UpdateAsync(TKey id, TDto item)
+    public virtual async Task<TDto> UpdateAsync(TKey id, TRequestDto item)
     {
         var entity = await _table.FindAsync(id);
         if (entity == null)

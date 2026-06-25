@@ -273,6 +273,10 @@ class Interpreter(Parser):
             ref_pk_type = self._get_pk_type(self.tables[type_name])
             return (ref_pk_type, type_name)
 
+        if type_name in self.enums:
+            enum_name = self._pascal_case(type_name)
+            return f"{enum_name}?" if is_nullable else enum_name
+
         return "object"
 
     @staticmethod
@@ -295,6 +299,18 @@ class Interpreter(Parser):
 
     # ── model ────────────────────────────────────────────────────────
 
+    def _table_uses_enums(self, table_node):
+        """Return set of enum names referenced by fields in this table."""
+        used = set()
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.enums:
+                used.add(type_name)
+            f = f.next
+        return used
+
     # Properties already provided by IdentityUser / IdentityUser<TKey>
     _IDENTITY_USER_FIELDS = {
         "Id", "UserName", "NormalizedUserName", "Email", "NormalizedEmail",
@@ -303,14 +319,14 @@ class Interpreter(Parser):
         "LockoutEnd", "LockoutEnabled", "AccessFailedCount",
     }
 
-    def _generate_model(self, table_node, namespace):
+    def _generate_model(self, table_node, namespace, enum_ns=""):
         name = table_node.a.value
         pk = self._get_pk_field(table_node)
         pk_name = self._pascal_case(pk.a.value) if pk else "Id"
 
         is_user = (name == "User")
         identity_base = ""
-        identity_using = ""
+        usings = ""
         identity_skip_fields = set()
 
         if is_user:
@@ -323,8 +339,14 @@ class Interpreter(Parser):
                     pk.position,
                 )
             identity_base = " : IdentityUser<Guid>"
-            identity_using = "using Microsoft.AspNetCore.Identity;\n\n"
+            usings += "using Microsoft.AspNetCore.Identity;\n"
             identity_skip_fields = self._IDENTITY_USER_FIELDS
+
+        if enum_ns and self._table_uses_enums(table_node):
+            usings += f"using {enum_ns};\n"
+
+        if usings:
+            usings += "\n"
 
         # collect all field names first to detect FK-id collisions
         all_names = set()
@@ -333,7 +355,7 @@ class Interpreter(Parser):
             all_names.add(self._pascal_case(f.a.value))
             f = f.next
 
-        buf = [identity_using + f"namespace {namespace};", "", f"public class {name}{identity_base}", "{"]
+        buf = [usings + f"namespace {namespace};", "", f"public class {name}{identity_base}", "{"]
 
         f = table_node.b
         while f:
@@ -361,11 +383,15 @@ class Interpreter(Parser):
 
     # ── dto ──────────────────────────────────────────────────────────
 
-    def _generate_request_dto(self, table_node, namespace):
+    def _generate_request_dto(self, table_node, namespace, enum_ns=""):
         name = table_node.a.value
         pk = self._get_pk_field(table_node)
         pk_name = self._pascal_case(pk.a.value) if pk else "Id"
         dto_name = f"{name}RequestDto"
+
+        usings = ""
+        if enum_ns and self._table_uses_enums(table_node):
+            usings = f"using {enum_ns};\n\n"
 
         # collect field names to detect FK-id collisions
         all_names = set()
@@ -374,7 +400,7 @@ class Interpreter(Parser):
             all_names.add(self._pascal_case(fn.a.value))
             fn = fn.next
 
-        buf = [f"namespace {namespace};", "", f"public class {dto_name}", "{"]
+        buf = [usings + f"namespace {namespace};", "", f"public class {dto_name}", "{"]
 
         f = table_node.b
         while f:
@@ -395,9 +421,13 @@ class Interpreter(Parser):
         buf.append("}")
         return "\n".join(buf)
 
-    def _generate_response_dto(self, table_node, namespace):
+    def _generate_response_dto(self, table_node, namespace, enum_ns=""):
         name = table_node.a.value
         dto_name = f"{name}ResponseDto"
+
+        usings = ""
+        if enum_ns and self._table_uses_enums(table_node):
+            usings = f"using {enum_ns};\n\n"
 
         # collect field names to detect FK-id collisions
         all_names = set()
@@ -406,7 +436,7 @@ class Interpreter(Parser):
             all_names.add(self._pascal_case(fn.a.value))
             fn = fn.next
 
-        buf = [f"namespace {namespace};", "", f"public class {dto_name}", "{"]
+        buf = [usings + f"namespace {namespace};", "", f"public class {dto_name}", "{"]
 
         f = table_node.b
         while f:
@@ -424,13 +454,18 @@ class Interpreter(Parser):
         buf.append("}")
         return "\n".join(buf)
 
-    def _generate_response_simplified_dto(self, table_node, namespace):
+    def _generate_response_simplified_dto(self, table_node, namespace, enum_ns=""):
         name = table_node.a.value
         pk = self._get_pk_field(table_node)
         pk_name = self._pascal_case(pk.a.value) if pk else "Id"
         pk_type = self.STORM_TO_CSHARP.get(pk.b.value.rstrip("?"), "int") if pk else "int"
         dto_name = f"{name}ResponseSimplifiedDto"
-        buf = [f"namespace {namespace};", "", f"public class {dto_name}", "{"]
+
+        usings = ""
+        if enum_ns and self._table_uses_enums(table_node):
+            usings = f"using {enum_ns};\n\n"
+
+        buf = [usings + f"namespace {namespace};", "", f"public class {dto_name}", "{"]
         buf.append(f"    public {pk_type} {pk_name} {{ get; set; }}")
 
         for nf in ["Name", "Title", "Label"]:
@@ -453,7 +488,8 @@ class Interpreter(Parser):
         cur = enum_node.b
         while cur:
             value = cur.b.value if cur.b else ""
-            buf.append(f"    {cur.a.value} = \"{value}\",")
+            comment = f" // \"{value}\"" if value else ""
+            buf.append(f"    {cur.a.value},{comment}")
             cur = cur.next
         buf.append("}")
         return "\n".join(buf)
@@ -477,7 +513,7 @@ using {dto_ns};
 
 namespace {namespace};
 
-public interface I{table_name}Service : IGenericService<{table_name}, {table_name}ResponseDto, {pk_type}>
+public interface I{table_name}Service : IGenericService<{table_name}, {table_name}ResponseDto, {table_name}RequestDto, {pk_type}>
 {{{extra_methods}
 }}
 """
@@ -511,7 +547,7 @@ using AutoMapper.QueryableExtensions;
 
 namespace {namespace};
 
-public class {table_name}Service : GenericService<{table_name}, {table_name}ResponseDto, {pk_type}>, I{table_name}Service
+public class {table_name}Service : GenericService<{table_name}, {table_name}ResponseDto, {table_name}RequestDto, {pk_type}>, I{table_name}Service
 {{
     public {table_name}Service(DbContext context, IMapper mapper) : base(context, mapper) {{ }}
 {extra_methods}
@@ -527,11 +563,9 @@ public class {table_name}Service : GenericService<{table_name}, {table_name}Resp
             lower_fk = fk_name[0].lower() + fk_name[1:]
             extra_endpoints += f"""
     [HttpGet("by-{fk_table.lower()}/{{{lower_fk}Id}}")]
-    [SwaggerOperation(
-        Tags = new[] {{ "{table_name}" }},
-        Summary = "Paginated list by {fk_table}",
-        Description = "Returns a paginated list of {table_name} records filtered by {fk_table}",
-        OperationId = "{table_name}IndexBy{fk_name}")]
+    [Tags("{table_name}")]
+    [EndpointSummary("Paginated list by {fk_table}")]
+    [EndpointDescription("Returns a paginated list of {table_name} records filtered by {fk_table}")]
     [ProducesResponseType(typeof(PaginatedResult<{table_name}ResponseDto>), StatusCodes.Status200OK)]
     public virtual async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> IndexBy{fk_name}({fk_pk_type} {lower_fk}Id,
         [FromQuery] int page = 1,
@@ -545,7 +579,6 @@ public class {table_name}Service : GenericService<{table_name}, {table_name}Resp
         return f"""\
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
-using Swashbuckle.AspNetCore.Annotations;
 using {controller_ns};
 using {iservice_ns};
 using {dto_ns};
@@ -556,32 +589,28 @@ namespace {namespace};
 
 [ApiController]
 [Route("api/[controller]")]
-public class {table_name}Controller : GenericController<{table_name}, {table_name}ResponseDto, {pk_type}>
+public class {table_name}Controller : GenericController<{table_name}, {table_name}ResponseDto, {table_name}RequestDto, {pk_type}>
 {{
     public {table_name}Controller(I{table_name}Service service) : base(service) {{ }}
 
     [HttpGet("{{id}}")]
-    [SwaggerOperation(
-        Tags = new[] {{ "{table_name}" }},
-        Summary = "Retrieve by id",
-        Description = "Returns a single {table_name} record by its unique identifier",
-        OperationId = "{table_name}Show")]
+    [Tags("{table_name}")]
+    [EndpointSummary("Retrieve by id")]
+    [EndpointDescription("Returns a single {table_name} record by its unique identifier")]
     [ProducesResponseType(typeof({table_name}ResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public override async Task<ActionResult<{table_name}ResponseDto>> Show({pk_type} id)
+    public virtual async Task<ActionResult<{table_name}ResponseDto>> Show({pk_type} id)
     {{
         var result = await _service.GetByIdAsync(id);
         return Ok(result);
     }}
 
     [HttpGet]
-    [SwaggerOperation(
-        Tags = new[] {{ "{table_name}" }},
-        Summary = "Paginated list",
-        Description = "Returns a paginated list of {table_name} records",
-        OperationId = "{table_name}Index")]
+    [Tags("{table_name}")]
+    [EndpointSummary("Paginated list")]
+    [EndpointDescription("Returns a paginated list of {table_name} records")]
     [ProducesResponseType(typeof(PaginatedResult<{table_name}ResponseDto>), StatusCodes.Status200OK)]
-    public override async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> Index(
+    public virtual async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> Index(
         [FromQuery] int page = 1,
         [FromQuery] int rows = 20)
     {{
@@ -590,43 +619,37 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
     }}
 {extra_endpoints}
     [HttpPost]
-    [SwaggerOperation(
-        Tags = new[] {{ "{table_name}" }},
-        Summary = "Create new",
-        Description = "Creates a new {table_name} record from the provided payload",
-        OperationId = "{table_name}Store")]
+    [Tags("{table_name}")]
+    [EndpointSummary("Create new")]
+    [EndpointDescription("Creates a new {table_name} record from the provided payload")]
     [ProducesResponseType(typeof({table_name}ResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public override async Task<ActionResult<{table_name}ResponseDto>> Store([FromBody] {table_name}RequestDto item)
+    public virtual async Task<ActionResult<{table_name}ResponseDto>> Store([FromBody] {table_name}RequestDto item)
     {{
         var result = await _service.CreateAsync(item);
         return Ok(result);
     }}
 
     [HttpPut("{{id}}")]
-    [SwaggerOperation(
-        Tags = new[] {{ "{table_name}" }},
-        Summary = "Update by id",
-        Description = "Updates an existing {table_name} record identified by its id with the provided payload",
-        OperationId = "{table_name}Update")]
+    [Tags("{table_name}")]
+    [EndpointSummary("Update by id")]
+    [EndpointDescription("Updates an existing {table_name} record identified by its id with the provided payload")]
     [ProducesResponseType(typeof({table_name}ResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public override async Task<ActionResult<{table_name}ResponseDto>> Update({pk_type} id, [FromBody] {table_name}RequestDto item)
+    public virtual async Task<ActionResult<{table_name}ResponseDto>> Update({pk_type} id, [FromBody] {table_name}RequestDto item)
     {{
         var result = await _service.UpdateAsync(id, item);
         return Ok(result);
     }}
 
     [HttpDelete("{{id}}")]
-    [SwaggerOperation(
-        Tags = new[] {{ "{table_name}" }},
-        Summary = "Delete by id",
-        Description = "Deletes a {table_name} record by its unique identifier",
-        OperationId = "{table_name}Destroy")]
+    [Tags("{table_name}")]
+    [EndpointSummary("Delete by id")]
+    [EndpointDescription("Deletes a {table_name} record by its unique identifier")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public override async Task<IActionResult> Destroy({pk_type} id)
+    public virtual async Task<IActionResult> Destroy({pk_type} id)
     {{
         await _service.DeleteAsync(id);
         return NoContent();
@@ -701,6 +724,7 @@ using {model_ns};
             "config_dto_path": dto_ns, "config_pagination_path": pagination_ns,
             "config_iservice_path": iservice_ns, "config_service_path": service_ns,
             "config_model_path": model_ns, "config_mapper_path": mapper_ns,
+            "config_controller_path": controller_ns,
         }
 
         isvc_base = self._substitute_template(GENERIC_ISERVICE_CSHARP, {
@@ -731,16 +755,16 @@ using {model_ns};
             table_dto_ns = f"{dto_ns}.{name}Dto"
             table_dto_path = config["DtoPath"] + f"/{name}Dto"
 
-            model_code = self._generate_model(node, model_ns)
+            model_code = self._generate_model(node, model_ns, enum_ns)
             self._write_file(output_dir, config["ModelPath"], f"{name}.cs", model_code)
 
-            req_code = self._generate_request_dto(node, table_dto_ns)
+            req_code = self._generate_request_dto(node, table_dto_ns, enum_ns)
             self._write_file(output_dir, table_dto_path, f"{name}RequestDto.cs", req_code)
 
-            res_code = self._generate_response_dto(node, table_dto_ns)
+            res_code = self._generate_response_dto(node, table_dto_ns, enum_ns)
             self._write_file(output_dir, table_dto_path, f"{name}ResponseDto.cs", res_code)
 
-            simp_code = self._generate_response_simplified_dto(node, table_dto_ns)
+            simp_code = self._generate_response_simplified_dto(node, table_dto_ns, enum_ns)
             self._write_file(output_dir, table_dto_path, f"{name}ResponseSimplifiedDto.cs", simp_code)
 
             isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, table_dto_ns, pagination_ns)
