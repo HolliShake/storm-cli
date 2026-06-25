@@ -241,9 +241,7 @@ class Parser(Tokenizer):
 
         if self.__check_value('='):
             self.__consume_value('=')
-            val_node = ASTNode.create_terminal_node(AstType.STR_LITERAL, self.current_token.value, self.current_token.position)
-            self.__consume_type(TokenType.STRING)
-            node.b = val_node
+            node.b = self._parse_expression()
 
         return node
 
@@ -265,6 +263,8 @@ class Parser(Tokenizer):
             else:
                 node.b = item
             prev = item
+            if self.__check_value(','):
+                self.__consume_value(',')
 
         self.__consume_value('}')
         return node

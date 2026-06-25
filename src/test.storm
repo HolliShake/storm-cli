@@ -2,17 +2,18 @@
 
 
 enum Options {
-    ITEM = "DOG"
+    ITEM = "DOG",
+    ITEM2 = "Hello" + World!"
 }
 
 table Product {
     id:int? pk;
     name:string(min=0,max=100,length=255);
     amout:double = 0; // default value is zero
-    qty:int(min=0,max=2)
+    qty:int(min=0,max=2) = 5 * 4; // computed evaluated by interpretrr
     owner:User;
 }
 
 table User {
-    
+    id uuid pk;
 }

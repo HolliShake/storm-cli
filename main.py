@@ -83,6 +83,7 @@ CONFIGS = {
         "IServicePath": "./IServices",
         "ServicePath": "./Services",
         "MapperPath": "./Mappers",
+        "DbContextPath": "./Data",
     },
     Template.DOTNETCSHARP_CLEANARCHITECTURE.value: {
         "EnumPath": "./Static",
@@ -92,6 +93,7 @@ CONFIGS = {
         "IServicesPath": "./APPLICATION/IServices",
         "ServicePath": "./INFRASTRUCTURE/Services",
         "MapperPath": "./INFRASTRUCTURE/Mappers",
+        "DbContextPath": "./INFRASTRUCTURE/Data",
     },
     Template.LARAVELPHP.value: {
         "EnumPath": "./app/Static",
