@@ -4,10 +4,15 @@
 
 
 from collections import deque
+import os
 
 from src.ast import AstType
 from src.enum import Enum
 from src.error_handler import raise_error
+from src.generic_controller_csharp import GENERIC_CONTROLLER_CSHARP, GENERIC_CONTROLLER_TEMPLATE_CSHARP
+from src.generic_mapper_csharp import GENERIC_MAPPER_TEMPLATE_CSHARP
+from src.generic_pagination_csharp import GENERIC_PAGINATION_CSHARP
+from src.generic_service_csharp import GENERIC_ISERVICE_CSHARP, GENERIC_SERVICE_CSHARP
 from src.parser import Parser
 from src.table import Table
 
@@ -211,6 +216,384 @@ class Interpreter(Parser):
 
     def get_table_order(self):
         return list(self._ordered)
+
+    # ── code generation ──────────────────────────────────────────────
+
+    STORM_TO_CSHARP = {
+        "int": "int", "long": "long", "float": "float", "double": "double",
+        "string": "string", "bool": "bool", "uuid": "Guid", "datetime": "DateTime",
+    }
+
+    def _path_to_namespace(self, path, project_name):
+        cleaned = path.lstrip("./").replace("/", ".").replace("\\", ".")
+        return f"{project_name}.{cleaned}" if cleaned else project_name
+
+    def _get_pk_field(self, table_node):
+        f = table_node.b
+        while f:
+            if f.value == "pk":
+                return f
+            f = f.next
+        return None
+
+    def _get_pk_type(self, table_node):
+        pk = self._get_pk_field(table_node)
+        if pk is None:
+            return "int"
+        type_name = pk.b.value.rstrip("?")
+        return self.STORM_TO_CSHARP.get(type_name, "int")
+
+    def _field_csharp_type(self, field_node):
+        type_node = field_node.b
+        type_name = type_node.value.rstrip("?")
+        is_nullable = type_node.value.endswith("?")
+
+        mapped = self.STORM_TO_CSHARP.get(type_name)
+        if mapped:
+            if mapped == "string":
+                return mapped
+            return f"{mapped}?" if is_nullable else mapped
+
+        if type_name in self.tables:
+            ref_pk_type = self._get_pk_type(self.tables[type_name])
+            return (ref_pk_type, type_name)
+
+        return "object"
+
+    @staticmethod
+    def _pascal_case(name):
+        if not name:
+            return name
+        return name[0].upper() + name[1:]
+
+    def _build_namespaces(self, config, project_name):
+        ns = {}
+        for key, path in config.items():
+            ns[key] = self._path_to_namespace(path, project_name)
+        return ns
+
+    def _substitute_template(self, template, vars_dict):
+        result = template
+        for key, value in vars_dict.items():
+            result = result.replace("$$" + key + "$$", value)
+        return result
+
+    # ── model ────────────────────────────────────────────────────────
+
+    def _generate_model(self, table_node, namespace):
+        name = table_node.a.value
+        pk = self._get_pk_field(table_node)
+        pk_name = self._pascal_case(pk.a.value) if pk else "Id"
+        buf = [f"namespace {namespace};", "", f"public class {name}", "{"]
+
+        f = table_node.b
+        while f:
+            field_name = self._pascal_case(f.a.value)
+            cs_type = self._field_csharp_type(f)
+
+            if isinstance(cs_type, tuple):
+                ref_pk_type, ref_name = cs_type
+                fk_name = f"{field_name}Id"
+                buf.append(f"    public {ref_pk_type} {fk_name} {{ get; set; }}")
+                buf.append(f"    public {ref_name}? {field_name} {{ get; set; }}")
+            else:
+                buf.append(f"    public {cs_type} {field_name} {{ get; set; }}")
+
+            f = f.next
+
+        buf.append("}")
+        return "\n".join(buf)
+
+    # ── dto ──────────────────────────────────────────────────────────
+
+    def _generate_request_dto(self, table_node, namespace):
+        name = table_node.a.value
+        pk = self._get_pk_field(table_node)
+        pk_name = self._pascal_case(pk.a.value) if pk else "Id"
+        dto_name = f"{name}RequestDto"
+        buf = [f"namespace {namespace};", "", f"public class {dto_name}", "{"]
+
+        f = table_node.b
+        while f:
+            field_name = self._pascal_case(f.a.value)
+            if field_name == pk_name:
+                f = f.next
+                continue
+            cs_type = self._field_csharp_type(f)
+            if isinstance(cs_type, tuple):
+                ref_pk_type, _ = cs_type
+                buf.append(f"    public {ref_pk_type} {field_name}Id {{ get; set; }}")
+            else:
+                buf.append(f"    public {cs_type} {field_name} {{ get; set; }}")
+            f = f.next
+
+        buf.append("}")
+        return "\n".join(buf)
+
+    def _generate_response_dto(self, table_node, namespace):
+        name = table_node.a.value
+        dto_name = f"{name}ResponseDto"
+        buf = [f"namespace {namespace};", "", f"public class {dto_name}", "{"]
+
+        f = table_node.b
+        while f:
+            field_name = self._pascal_case(f.a.value)
+            cs_type = self._field_csharp_type(f)
+            if isinstance(cs_type, tuple):
+                ref_pk_type, _ = cs_type
+                buf.append(f"    public {ref_pk_type} {field_name}Id {{ get; set; }}")
+            else:
+                buf.append(f"    public {cs_type} {field_name} {{ get; set; }}")
+            f = f.next
+
+        buf.append("}")
+        return "\n".join(buf)
+
+    def _generate_response_simplified_dto(self, table_node, namespace):
+        name = table_node.a.value
+        pk = self._get_pk_field(table_node)
+        pk_name = self._pascal_case(pk.a.value) if pk else "Id"
+        pk_type = self.STORM_TO_CSHARP.get(pk.b.value.rstrip("?"), "int") if pk else "int"
+        dto_name = f"{name}ResponseSimplifiedDto"
+        buf = [f"namespace {namespace};", "", f"public class {dto_name}", "{"]
+        buf.append(f"    public {pk_type} {pk_name} {{ get; set; }}")
+
+        for nf in ["Name", "Title", "Label"]:
+            f = table_node.b
+            while f:
+                if self._pascal_case(f.a.value) == nf:
+                    cs_type = self._field_csharp_type(f)
+                    buf.append(f"    public {cs_type[0] if isinstance(cs_type, tuple) else cs_type} {nf} {{ get; set; }}")
+                    break
+                f = f.next
+
+        buf.append("}")
+        return "\n".join(buf)
+
+    # ── enum ─────────────────────────────────────────────────────────
+
+    def _generate_csharp_enum(self, enum_node, namespace):
+        name = enum_node.a.value
+        buf = [f"namespace {namespace};", "", f"public enum {name}", "{"]
+        cur = enum_node.b
+        while cur:
+            value = cur.b.value if cur.b else ""
+            buf.append(f"    {cur.a.value} = \"{value}\",")
+            cur = cur.next
+        buf.append("}")
+        return "\n".join(buf)
+
+    # ── template generators ──────────────────────────────────────────
+
+    def _generate_iservice(self, table_name, namespace, pk_type, iservice_ns, model_ns, dto_ns):
+        return f"""\
+using {iservice_ns};
+using {model_ns};
+using {dto_ns};
+
+namespace {namespace};
+
+public interface I{table_name}Service : IGenericService<{table_name}, {table_name}ResponseDto, {pk_type}>
+{{
+}}
+"""
+
+    def _generate_service(self, table_name, namespace, pk_type, service_ns, iservice_ns, model_ns, dto_ns):
+        return f"""\
+using {service_ns};
+using {iservice_ns};
+using {model_ns};
+using {dto_ns};
+using Microsoft.EntityFrameworkCore;
+using AutoMapper;
+
+namespace {namespace};
+
+public class {table_name}Service : GenericService<{table_name}, {table_name}ResponseDto, {pk_type}>, I{table_name}Service
+{{
+    public {table_name}Service(DbContext context, IMapper mapper) : base(context, mapper) {{ }}
+}}
+"""
+
+    def _generate_controller(self, table_name, namespace, pk_type, controller_ns, iservice_ns, dto_ns, pagination_ns, model_ns):
+        return f"""\
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc;
+using Swashbuckle.AspNetCore.Annotations;
+using {controller_ns};
+using {iservice_ns};
+using {dto_ns};
+using {pagination_ns};
+using {model_ns};
+
+namespace {namespace};
+
+[ApiController]
+[Route("api/[controller]")]
+public class {table_name}Controller : GenericController<{table_name}, {table_name}ResponseDto, {pk_type}>
+{{
+    public {table_name}Controller(I{table_name}Service service) : base(service) {{ }}
+
+    [HttpGet("{{id}}")]
+    [SwaggerOperation(
+        Tags = new[] {{ "{table_name}" }},
+        Summary = "Retrieve by id",
+        Description = "Returns a single {table_name} record by its unique identifier",
+        OperationId = "{table_name}Show")]
+    public override async Task<ActionResult<{table_name}ResponseDto>> Show({pk_type} id)
+    {{
+        var result = await _service.GetByIdAsync(id);
+        return Ok(result);
+    }}
+
+    [HttpGet]
+    [SwaggerOperation(
+        Tags = new[] {{ "{table_name}" }},
+        Summary = "Paginated list",
+        Description = "Returns a paginated list of {table_name} records",
+        OperationId = "{table_name}Index")]
+    public override async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> Index(
+        [FromQuery] int page = 1,
+        [FromQuery] int rows = 20)
+    {{
+        var result = await _service.PaginateAsync(page, rows);
+        return Ok(result);
+    }}
+
+    [HttpPost]
+    [SwaggerOperation(
+        Tags = new[] {{ "{table_name}" }},
+        Summary = "Create new",
+        Description = "Creates a new {table_name} record from the provided payload",
+        OperationId = "{table_name}Store")]
+    public override async Task<ActionResult<{table_name}ResponseDto>> Store([FromBody] {table_name}RequestDto item)
+    {{
+        var result = await _service.CreateAsync(item);
+        return Ok(result);
+    }}
+
+    [HttpPut("{{id}}")]
+    [SwaggerOperation(
+        Tags = new[] {{ "{table_name}" }},
+        Summary = "Update by id",
+        Description = "Updates an existing {table_name} record identified by its id with the provided payload",
+        OperationId = "{table_name}Update")]
+    public override async Task<ActionResult<{table_name}ResponseDto>> Update({pk_type} id, [FromBody] {table_name}RequestDto item)
+    {{
+        var result = await _service.UpdateAsync(id, item);
+        return Ok(result);
+    }}
+
+    [HttpDelete("{{id}}")]
+    [SwaggerOperation(
+        Tags = new[] {{ "{table_name}" }},
+        Summary = "Delete by id",
+        Description = "Deletes a {table_name} record by its unique identifier",
+        OperationId = "{table_name}Destroy")]
+    public override async Task<IActionResult> Destroy({pk_type} id)
+    {{
+        await _service.DeleteAsync(id);
+        return NoContent();
+    }}
+}}
+"""
+
+    def _generate_mapper(self, table_name, namespace, model_ns, dto_ns):
+        vars_dict = {
+            "config_mapper_path": namespace,
+            "config_model_path": model_ns,
+            "config_dto_path": dto_ns,
+            "Entity": table_name,
+            "TRequestDto": f"{table_name}RequestDto",
+            "TResponseDto": f"{table_name}ResponseDto",
+        }
+        return self._substitute_template(GENERIC_MAPPER_TEMPLATE_CSHARP, vars_dict)
+
+    # ── write ────────────────────────────────────────────────────────
+
+    def _write_file(self, base_dir, path, filename, content):
+        dir_path = os.path.join(base_dir, path.lstrip("./"))
+        os.makedirs(dir_path, exist_ok=True)
+        file_path = os.path.join(dir_path, filename)
+        with open(file_path, "w") as f:
+            f.write(content)
+        print(f"  [ok] {file_path}")
+
+    # ── entry point ──────────────────────────────────────────────────
+
+    def generate(self, config, project_name, output_dir="."):
+        ns = self._build_namespaces(config, project_name)
+
+        model_ns = ns.get("ModelPath", project_name)
+        dto_ns = ns.get("DtoPath", project_name)
+        controller_ns = ns.get("ControllerPath", project_name)
+        iservice_ns = ns.get("IServicePath", ns.get("IServicesPath", project_name))
+        service_ns = ns.get("ServicePath", project_name)
+        mapper_ns = ns.get("MapperPath", project_name)
+        enum_ns = ns.get("EnumPath", project_name)
+        pagination_ns = ns.get("PaginationPath", project_name)
+
+        print("\nGenerating code...")
+
+        # ── base generic files (once) ─────────────────────────────────
+        base_vars = {
+            "config_dto_path": dto_ns, "config_pagination_path": pagination_ns,
+            "config_iservice_path": iservice_ns, "config_service_path": service_ns,
+            "config_model_path": model_ns, "config_mapper_path": mapper_ns,
+        }
+
+        isvc_base = self._substitute_template(GENERIC_ISERVICE_CSHARP, {
+            k: v for k, v in base_vars.items() if k in GENERIC_ISERVICE_CSHARP
+        })
+        svc_base = self._substitute_template(GENERIC_SERVICE_CSHARP, {
+            k: v for k, v in base_vars.items() if k in GENERIC_SERVICE_CSHARP
+        })
+        ctrl_base = self._substitute_template(GENERIC_CONTROLLER_CSHARP, {
+            k: v for k, v in base_vars.items() if k in GENERIC_CONTROLLER_CSHARP
+        })
+        pag_base = self._substitute_template(GENERIC_PAGINATION_CSHARP, {"config_pagination_path": pagination_ns})
+
+        self._write_file(output_dir, config.get("IServicesPath", config.get("IServicePath", ".")), "IGenericService.cs", isvc_base)
+        self._write_file(output_dir, config["ServicePath"], "GenericService.cs", svc_base)
+        self._write_file(output_dir, config["ControllerPath"], "GenericController.cs", ctrl_base)
+        self._write_file(output_dir, config.get("PaginationPath", "."), "PaginatedResult.cs", pag_base)
+
+        # ── per-table files ──────────────────────────────────────────
+        for name in self._ordered:
+            node = self.tables[name]
+            pk_type = self._get_pk_type(node)
+
+            model_code = self._generate_model(node, model_ns)
+            self._write_file(output_dir, config["ModelPath"], f"{name}.cs", model_code)
+
+            req_code = self._generate_request_dto(node, dto_ns)
+            self._write_file(output_dir, config["DtoPath"], f"{name}RequestDto.cs", req_code)
+
+            res_code = self._generate_response_dto(node, dto_ns)
+            self._write_file(output_dir, config["DtoPath"], f"{name}ResponseDto.cs", res_code)
+
+            simp_code = self._generate_response_simplified_dto(node, dto_ns)
+            self._write_file(output_dir, config["DtoPath"], f"{name}ResponseSimplifiedDto.cs", simp_code)
+
+            isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, dto_ns)
+            self._write_file(output_dir, config.get("IServicesPath", config.get("IServicePath", ".")), f"I{name}Service.cs", isvc_code)
+
+            svc_code = self._generate_service(name, service_ns, pk_type, service_ns, iservice_ns, model_ns, dto_ns)
+            self._write_file(output_dir, config["ServicePath"], f"{name}Service.cs", svc_code)
+
+            ctrl_code = self._generate_controller(name, controller_ns, pk_type, controller_ns, iservice_ns, dto_ns, pagination_ns, model_ns)
+            self._write_file(output_dir, config["ControllerPath"], f"{name}Controller.cs", ctrl_code)
+
+            map_code = self._generate_mapper(name, mapper_ns, model_ns, dto_ns)
+            self._write_file(output_dir, config["MapperPath"], f"{name}MappingProfile.cs", map_code)
+
+        # ── per-enum files ───────────────────────────────────────────
+        for enum_node in self.enums.values():
+            enum_code = self._generate_csharp_enum(enum_node, enum_ns)
+            ename = enum_node.a.value
+            self._write_file(output_dir, config["EnumPath"], f"{ename}.cs", enum_code)
+
+        print("  [ok] code generation complete")
 
 
 

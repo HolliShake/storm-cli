@@ -5,8 +5,10 @@ GENERIC_ISERVICE_CSHARP = """\
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using $config_dto_path$;
+using $config_pagination_path$;
 
-namespace {{config_iservice_path}};
+namespace $config_iservice_path$;
 
 public interface IGenericService<TEntity, TDto, TKey>
     where TEntity : class
@@ -29,8 +31,13 @@ using System.Threading.Tasks;
 using AutoMapper;
 using AutoMapper.QueryableExtensions;
 using Microsoft.EntityFrameworkCore;
+using $config_iservice_path$;
+using $config_model_path$;
+using $config_dto_path$;
+using $config_mapper_path$;
+using $config_pagination_path$;
 
-namespace {{config_service_path}};
+namespace $config_service_path$;
 
 public class GenericService<TEntity, TDto, TKey> : IGenericService<TEntity, TDto, TKey>
     where TEntity : class

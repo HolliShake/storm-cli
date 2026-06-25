@@ -53,7 +53,7 @@ class TestIntegration:
         name_field = id_field.next
         assert name_field.a.value == 'name'
         assert name_field.b.value == 'string'
-        assert name_field.c is not None
+        assert name_field.b.a is not None
 
         amout_field = name_field.next
         assert amout_field.a.value == 'amout'
@@ -63,7 +63,7 @@ class TestIntegration:
         qty_field = amout_field.next
         assert qty_field.a.value == 'qty'
         assert qty_field.b.value == 'int'
-        assert qty_field.c is not None
+        assert qty_field.b.a is not None
 
         owner_field = qty_field.next
         assert owner_field.a.value == 'owner'

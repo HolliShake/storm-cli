@@ -3,10 +3,21 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 
 from src.template import Template
+from src.interpreter import Interpreter
+
+
+def check_network():
+    try:
+        socket.create_connection(("8.8.8.8", 53), timeout=3)
+    except OSError:
+        print("ERROR: No internet connection. This script requires network access.")
+        sys.exit(1)
+    print("  [ok] internet connection")
 
 
 def check_dotnet_prerequisites():
@@ -74,6 +85,52 @@ def check_laravel_prerequisites():
     print("  [ok] composer")
 
 
+SCHEMA_STORM = """\
+// ============================================================================
+//  Schema Definition — define your data model here
+//  Run `python main.py --generate` after editing to rebuild all source files.
+// ============================================================================
+
+// ── Enums ──────────────────────────────────────────────────────────────────
+
+enum Status {
+    Active   = "active",
+    Inactive = "inactive",
+    Pending  = "pending"
+}
+
+enum Role {
+    Admin = "admin",
+    User  = "user"
+}
+
+// ── Tables ─────────────────────────────────────────────────────────────────
+
+table User {
+    id:       uuid pk;
+    name:     string(min=2,max=100);
+    email:    string(max=255) unique;
+    password: string(max=255);
+    role:     Role;
+    status:   Status;
+    createdAt:datetime;
+    updatedAt:datetime;
+}
+
+table Product {
+    id:      int? pk;
+    name:    string(min=1,max=200);
+    price:   double(min=0) = 0;
+    stock:   int(min=0) = 0;
+    status:  Status;
+    ownerId: uuid;
+    owner:   User;
+    createdAt:datetime;
+    updatedAt:datetime;
+}
+"""
+
+
 CONFIGS = {
     Template.DOTNETCSHARP.value: {
         "EnumPath": "./Static",
@@ -84,6 +141,7 @@ CONFIGS = {
         "ServicePath": "./Services",
         "MapperPath": "./Mappers",
         "DbContextPath": "./Data",
+        "PaginationPath": "./Pagination",
     },
     Template.DOTNETCSHARP_CLEANARCHITECTURE.value: {
         "EnumPath": "./Static",
@@ -94,6 +152,7 @@ CONFIGS = {
         "ServicePath": "./INFRASTRUCTURE/Services",
         "MapperPath": "./INFRASTRUCTURE/Mappers",
         "DbContextPath": "./INFRASTRUCTURE/Data",
+        "PaginationPath": "./APPLICATION/Pagination",
     },
     Template.LARAVELPHP.value: {
         "EnumPath": "./app/Static",
@@ -273,6 +332,12 @@ def main():
         help="Initialize a new project"
     )
 
+    parser.add_argument(
+        "--generate", "-g",
+        action="store_true",
+        help="Generate code from schema.storm"
+    )
+
     template_choices = [t.value for t in Template]
     parser.add_argument(
         "--template", "-t",
@@ -293,6 +358,8 @@ def main():
         print(f"Initializing project with template: {template}")
         print(f"Project name: {project_name}")
 
+        check_network()
+
         if template in (Template.DOTNETCSHARP.value, Template.DOTNETCSHARP_CLEANARCHITECTURE.value):
             check_dotnet_prerequisites()
         elif template == Template.LARAVELPHP.value:
@@ -306,6 +373,37 @@ def main():
             init_dotnet_clean_arch_project(config, ".", project_name)
         elif template == Template.LARAVELPHP.value:
             init_laravel_project(config, ".")
+
+        schema_path = os.path.join(".", "schema.storm")
+        if not os.path.exists(schema_path):
+            with open(schema_path, "w", encoding="utf-8") as f:
+                f.write(SCHEMA_STORM)
+            print("  [ok] schema.storm created")
+        else:
+            print("  [--] schema.storm already exists, skipped")
+
+    elif args.generate:
+        config_path = "storm.config.json"
+        schema_path = args.name or "schema.storm"
+
+        if not os.path.exists(config_path):
+            print(f"ERROR: {config_path} not found. Run --init first.")
+            sys.exit(1)
+
+        if not os.path.exists(schema_path):
+            print(f"ERROR: {schema_path} not found.")
+            sys.exit(1)
+
+        with open(config_path) as f:
+            config = json.load(f)
+
+        project_name = os.path.basename(os.getcwd())
+        print(f"Generating code for: {project_name}")
+        print(f"  config: {config_path}")
+        print(f"  schema: {schema_path}")
+
+        interpreter = Interpreter(schema_path)
+        interpreter.generate(config, project_name, ".")
     else:
         parser.print_help()
 
