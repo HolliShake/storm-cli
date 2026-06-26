@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "storm-cli"
-version = "1.0.1"
+version = "1.0.2"
 description = "Declarative API scaffold: define your data model in .storm format and generate complete C# (.NET) or PHP (Laravel) backends with zero boilerplate"
 readme = "README.md"
 license = "MIT"

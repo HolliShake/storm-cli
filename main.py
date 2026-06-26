@@ -15,9 +15,9 @@ def check_network():
     try:
         socket.create_connection(("8.8.8.8", 53), timeout=3)
     except OSError:
-        print("ERROR: No internet connection. This script requires network access.")
+        _err("No internet connection. This script requires network access.")
         sys.exit(1)
-    print("  [ok] internet connection")
+    _ok("internet connection")
 
 
 def check_dotnet_prerequisites():
@@ -41,14 +41,14 @@ def check_dotnet_prerequisites():
             missing.append("ef-core (dotnet-ef global tool)")
 
     if missing:
-        print("ERROR: Missing prerequisites:")
+        _err("Missing prerequisites:")
         for item in missing:
-            print(f"  - {item}")
-        print("\nInstall the missing dependencies and try again.")
+            print(f"  {_RED}-{_RST} {item}")
+        print(f"\n{_DIM}Install the missing dependencies and try again.{_RST}")
         sys.exit(1)
 
-    print(f"  [ok] dotnet-sdk ({version})")
-    print("  [ok] ef-core")
+    _ok(f"dotnet-sdk ({version})")
+    _ok("ef-core")
 
 
 def check_laravel_prerequisites():
@@ -76,14 +76,14 @@ def check_laravel_prerequisites():
         missing.append("composer")
 
     if missing:
-        print("ERROR: Missing prerequisites:")
+        _err("Missing prerequisites:")
         for item in missing:
-            print(f"  - {item}")
-        print("\nInstall the missing dependencies and try again.")
+            print(f"  {_RED}-{_RST} {item}")
+        print(f"\n{_DIM}Install the missing dependencies and try again.{_RST}")
         sys.exit(1)
 
-    print("  [ok] php 8.5+")
-    print("  [ok] composer")
+    _ok("php 8.5+")
+    _ok("composer")
 
 
 SCHEMA_STORM = """\
@@ -174,22 +174,22 @@ def write_config(config, target_dir):
     config_path = os.path.join(target_dir, "storm.config.json")
     with open(config_path, "w") as f:
         json.dump(config, f, indent=4)
-    print(f"  [ok] storm.config.json written")
+    _ok("storm.config.json written")
 
 
 def create_config_dirs(config, base_dir):
     for path in config.values():
         dir_path = os.path.join(base_dir, path.lstrip("./"))
         os.makedirs(dir_path, exist_ok=True)
-    print("  [ok] config directories created")
+    _ok("config directories created")
 
 
 def run_dotnet(args, cwd=None):
-    print(f"  [>] dotnet {' '.join(args)}")
+    _step("dotnet", ' '.join(args))
     result = subprocess.run(["dotnet"] + args, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"ERROR: dotnet command failed:")
-        print(result.stderr)
+        _err("dotnet command failed:")
+        print(_RED + result.stderr + _RST)
         sys.exit(1)
 
 
@@ -205,24 +205,24 @@ def resolve_composer():
 def run_composer(args, cwd=None, ignore_platform_reqs=None):
     composer_exe = resolve_composer()
     if composer_exe is None:
-        print("ERROR: composer not found. Install Composer and try again.")
+        _err("composer not found. Install Composer and try again.")
         sys.exit(1)
     cmd = [composer_exe] + args
     if ignore_platform_reqs:
         for req in ignore_platform_reqs:
             cmd.append(f"--ignore-platform-req={req}")
-    print(f"  [>] composer {' '.join(args)}")
+    _step("composer", ' '.join(args))
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"ERROR: composer command failed:")
-        print(result.stderr)
+        _err("composer command failed:")
+        print(_RED + result.stderr + _RST)
         sys.exit(1)
 
 
 def get_dotnet_version():
     result = subprocess.run(["dotnet", "--version"], capture_output=True, text=True)
     if result.returncode != 0:
-        print("ERROR: Could not determine dotnet SDK version")
+        _err("Could not determine dotnet SDK version")
         sys.exit(1)
     version = result.stdout.strip()
     parts = version.split(".")
@@ -235,9 +235,9 @@ def add_nuget_package(project_csproj, package_name, version=None, cwd=None):
         args.extend(["--version", version])
     result = subprocess.run(["dotnet"] + args, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"  [!!] {package_name} skipped (already present or not found)")
+        _warn(f"{package_name} skipped (already present or not found)")
     else:
-        print(f"  [ok] {package_name}")
+        _ok(package_name)
 
 
 NUGET_SIMPLE = [
@@ -281,13 +281,13 @@ def install_nuget_packages(project_csproj, packages, sdk_version, cwd=None):
 
 
 def init_dotnet_project(config, project_dir, name):
-    print("\nCreating dotnet webapi project...")
+    _hdr("Creating dotnet webapi project...")
     run_dotnet(["new", "webapi", "-n", name, "-o", project_dir, "--force"])
     create_config_dirs(config, project_dir)
 
     sdk_version = get_dotnet_version()
     csproj = f"{name}.csproj"
-    print(f"\nInstalling NuGet packages (SDK {sdk_version})...")
+    _hdr(f"Installing NuGet packages (SDK {sdk_version})...")
     install_nuget_packages(csproj, NUGET_SIMPLE, sdk_version, cwd=project_dir)
 
     write_config(config, project_dir)
@@ -302,11 +302,11 @@ def init_dotnet_project(config, project_dir, name):
             "Server=(localdb)\\mssqllocaldb;Database=" + name + ";Trusted_Connection=True;MultipleActiveResultSets=true"
         with open(appsettings, "w") as f:
             json.dump(cfg, f, indent=2)
-        print("  [ok] appsettings.json patched")
+        _ok("appsettings.json patched")
 
 
 def init_dotnet_clean_arch_project(config, solution_dir, name):
-    print("\nCreating clean architecture solution...")
+    _hdr("Creating clean architecture solution...")
 
     layers = [
         ("DOMAIN", "classlib"),
@@ -331,7 +331,7 @@ def init_dotnet_clean_arch_project(config, solution_dir, name):
     run_dotnet(["add", "API/API.csproj", "reference", "INFRASTRUCTURE/INFRASTRUCTURE.csproj"], cwd=solution_dir)
 
     sdk_version = get_dotnet_version()
-    print(f"\nInstalling NuGet packages (SDK {sdk_version})...")
+    _hdr(f"Installing NuGet packages (SDK {sdk_version})...")
     for layer, packages in NUGET_CLEAN_ARCH.items():
         csproj = f"{layer}/{layer}.csproj"
         install_nuget_packages(csproj, packages, sdk_version, cwd=solution_dir)
@@ -425,8 +425,9 @@ app.MapScalarApiReference(options =>
     options.WithTitle("$$NAMESPACE$$");
     options.WithTheme(ScalarTheme.BluePlanet);
     options.WithDefaultHttpClient(ScalarTarget.JavaScript, ScalarClient.Axios);
-    options.WithPreferredScheme("Bearer");
+    options.AddPreferredSecuritySchemes("Bearer");
 });
+
 
 app.UseHttpsRedirection();
 app.UseAuthentication();
@@ -520,7 +521,7 @@ app.MapScalarApiReference(options =>
     options.WithTitle("$$NAMESPACE$$");
     options.WithTheme(ScalarTheme.BluePlanet);
     options.WithDefaultHttpClient(ScalarTarget.JavaScript, ScalarClient.Axios);
-    options.WithPreferredScheme("Bearer");
+    options.AddPreferredSecuritySchemes("Bearer");
 });
 
 app.UseHttpsRedirection();
@@ -536,7 +537,7 @@ def write_program_cs(template: str, project_dir: str, namespace_name: str):
     path = os.path.join(project_dir, "Program.cs")
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"  [ok] Program.cs updated")
+    _ok("Program.cs updated")
 
 
 COMPOSER_PACKAGES = [
@@ -550,7 +551,7 @@ def set_laravel_php_requirements(project_dir):
     """Set PHP ^8.5 and Laravel ^12.0 requirements in composer.json."""
     composer_path = os.path.join(project_dir, "composer.json")
     if not os.path.exists(composer_path):
-        print("  [!!] composer.json not found, skipping version requirements")
+        _warn("composer.json not found, skipping version requirements")
         return
 
     with open(composer_path, "r", encoding="utf-8") as f:
@@ -576,7 +577,7 @@ def set_laravel_php_requirements(project_dir):
 
     with open(composer_path, "w", encoding="utf-8") as f:
         json.dump(composer, f, indent=4)
-    print(f"  [ok] composer.json updated: php ^8.5, laravel {laravel_constraint}")
+    _ok(f"composer.json updated: php ^8.5, laravel {laravel_constraint}")
 
 
 def merge_temp_project(temp_dir, target_dir):
@@ -597,21 +598,21 @@ def merge_temp_project(temp_dir, target_dir):
 
 def init_laravel_project(config, project_dir):
     temp_dir = os.path.join(project_dir, "__laravel_temp__")
-    print("\nCreating Laravel project in temporary directory...")
+    _hdr("Creating Laravel project in temporary directory...")
     run_composer([
         "create-project", "laravel/laravel", temp_dir, "--prefer-dist",
         "--ignore-platform-req=ext-fileinfo",
     ])
-    print("  [ok] Laravel project created")
+    _ok("Laravel project created")
 
     merge_temp_project(temp_dir, project_dir)
-    print("  [ok] project files merged into root")
+    _ok("project files merged into root")
 
     create_config_dirs(config, project_dir)
 
     set_laravel_php_requirements(project_dir)
 
-    print(f"\nInstalling Composer packages...")
+    _hdr("Installing Composer packages...")
     run_composer(
         ["require"] + COMPOSER_PACKAGES,
         cwd=project_dir,
@@ -638,10 +639,40 @@ BANNER = r"""
                                              
 """
 
-YEL = "\033[33m"
-RST = "\033[0m"
+# ─── ANSI color codes ──────────────────────────────────────────────────────
+_RST = "\033[0m"
+_BLD = "\033[1m"
+_DIM = "\033[2m"
+_RED = "\033[31m"
+_GRN = "\033[32m"
+_YEL = "\033[33m"
+_BLU = "\033[34m"
+_MAG = "\033[35m"
+_CYN = "\033[36m"
+_WHT = "\033[37m"
 
-HELP_BANNER = f"""{YEL}
+def _ok(msg):
+    print(f"  {_GRN}{_BLD}[ok]{_RST} {msg}")
+
+def _err(msg):
+    print(f"{_RED}{_BLD}ERROR:{_RST} {msg}")
+
+def _warn(msg):
+    print(f"  {_YEL}[!!]{_RST} {msg}")
+
+def _skip(msg):
+    print(f"  {_DIM}[--]{_RST} {_DIM}{msg}{_RST}")
+
+def _step(cmd, args):
+    print(f"  {_CYN}[>]{_RST} {cmd} {_CYN}{args}{_RST}")
+
+def _hdr(msg):
+    print(f"\n{_MAG}{_BLD}{msg}{_RST}")
+
+def _path(msg):
+    return f"{_BLU}{msg}{_RST}"
+
+HELP_BANNER = f"""{_YEL}
 ███████ ████████  ██████  ██████  ███    ███ 
 ██         ██    ██    ██ ██   ██ ████  ████ 
 ███████    ██    ██    ██ ██████  ██ ████ ██ 
@@ -656,7 +687,7 @@ HELP_BANNER = f"""{YEL}
              ██████ ███████ ██               
                                              
                                              
-  API Starter Kit -- schema to source{RST}
+  API Starter Kit -- schema to source{_RST}
 """
 
 
@@ -693,11 +724,11 @@ def main():
     args = parser.parse_args()
 
     if args.init:
-        print(YEL + BANNER + RST)
+        print(_YEL + BANNER + _RST)
         template = args.template or template_choices[0]
         project_name = args.name or os.path.basename(os.getcwd())
-        print(f"Initializing project with template: {template}")
-        print(f"Project name: {project_name}")
+        _ok(f"template: {_CYN}{template}{_RST}")
+        _ok(f"project name: {_MAG}{project_name}{_RST}")
 
         check_network()
 
@@ -719,30 +750,31 @@ def main():
         if not os.path.exists(schema_path):
             with open(schema_path, "w", encoding="utf-8") as f:
                 f.write(SCHEMA_STORM)
-            print("  [ok] schema.storm created")
+            _ok("schema.storm created")
         else:
-            print("  [--] schema.storm already exists, skipped")
+            _skip("schema.storm already exists, skipped")
 
     elif args.generate:
-        print(YEL + BANNER + RST)
+        print(_YEL + BANNER + _RST)
         config_path = "storm.config.json"
         schema_path = args.name or "schema.storm"
 
         if not os.path.exists(config_path):
-            print(f"ERROR: {config_path} not found. Run --init first.")
+            _err(f"{config_path} not found. Run --init first.")
             sys.exit(1)
 
         if not os.path.exists(schema_path):
-            print(f"ERROR: {schema_path} not found.")
+            _err(f"{schema_path} not found.")
             sys.exit(1)
 
         with open(config_path) as f:
             config = json.load(f)
 
         project_name = os.path.basename(os.getcwd())
-        print(f"Generating code for: {project_name}")
-        print(f"  config: {config_path}")
-        print(f"  schema: {schema_path}")
+        _hdr("Generating code")
+        print(f"  project:   {_MAG}{project_name}{_RST}")
+        print(f"  config:    {_path(config_path)}")
+        print(f"  schema:    {_path(schema_path)}")
 
         interpreter = Interpreter(schema_path)
         interpreter.generate(config, project_name, ".")

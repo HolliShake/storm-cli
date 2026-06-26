@@ -13,6 +13,18 @@ from src.generic_controller_csharp import GENERIC_CONTROLLER_CSHARP, GENERIC_CON
 from src.generic_mapper_csharp import GENERIC_MAPPER_TEMPLATE_CSHARP
 from src.generic_pagination_csharp import GENERIC_PAGINATION_CSHARP
 from src.generic_query_chsarp import GENERIC_QUERY_CSHARP
+
+# ─── ANSI colors ───────────────────────────────────────────────────────────
+_RST = "\033[0m"
+_BLD = "\033[1m"
+_GRN = "\033[32m"
+_MAG = "\033[35m"
+
+def _ok(msg):
+    print(f"  {_GRN}{_BLD}[ok]{_RST} {msg}")
+
+def _hdr(msg):
+    print(f"\n{_MAG}{_BLD}{msg}{_RST}")
 from src.generic_service_csharp import GENERIC_ISERVICE_CSHARP, GENERIC_SERVICE_CSHARP
 from src.parser import Parser
 from src.table import Table
@@ -765,7 +777,7 @@ using {model_ns};
         file_path = os.path.join(dir_path, filename)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
-        print(f"  [ok] {file_path}")
+        _ok(file_path)
 
     # ── PHP / Laravel helpers ────────────────────────────────────────
 
@@ -2052,7 +2064,7 @@ class AppServiceProvider extends ServiceProvider
 
     def _generate_laravel(self, config, output_dir):
         """Generate PHP/Laravel code from the schema."""
-        print("\nGenerating Laravel PHP code...")
+        _hdr("Generating Laravel PHP code...")
 
         # ── Base Controller ───────────────────────────────────────────
         self._write_file(
@@ -2095,7 +2107,7 @@ class AppServiceProvider extends ServiceProvider
         routes_code = self._generate_php_routes()
         self._write_file(output_dir, "routes", "api.php", routes_code)
 
-        print("  [ok] code generation complete")
+        _ok("code generation complete")
         return
 
     # ── C# / .NET generation ─────────────────────────────────────
@@ -2119,7 +2131,7 @@ class AppServiceProvider extends ServiceProvider
         enum_ns = ns.get("EnumPath", project_name)
         pagination_ns = f"{dto_ns}.Shared"
 
-        print("\nGenerating code...")
+        _hdr("Generating code...")
 
         # ── base generic files (once) ─────────────────────────────────
         base_vars = {
@@ -2250,7 +2262,7 @@ app.MapScalarApiReference(options =>
     options.WithTitle("{proj_ns}");
     options.WithTheme(ScalarTheme.BluePlanet);
     options.WithDefaultHttpClient(ScalarTarget.JavaScript, ScalarClient.Axios);
-    options.WithPreferredScheme("Bearer");
+    options.AddPreferredSecuritySchemes("Bearer");
 }});
 
 app.UseHttpsRedirection();
@@ -2305,7 +2317,7 @@ app.Run();
             ename = enum_node.a.value
             self._write_file(output_dir, config["EnumPath"], f"{ename}.cs", enum_code)
 
-        print("  [ok] code generation complete")
+        _ok("code generation complete")
 
 
 
