@@ -169,11 +169,14 @@ CONFIGS = {
 }
 
 
-def write_config(config, target_dir):
+def write_config(config, target_dir, project_name=None):
     os.makedirs(target_dir, exist_ok=True)
     config_path = os.path.join(target_dir, "storm.config.json")
+    data = dict(config)
+    if project_name:
+        data["ProjectName"] = project_name
     with open(config_path, "w") as f:
-        json.dump(config, f, indent=4)
+        json.dump(data, f, indent=4)
     _ok("storm.config.json written")
 
 
@@ -290,7 +293,7 @@ def init_dotnet_project(config, project_dir, name):
     _hdr(f"Installing NuGet packages (SDK {sdk_version})...")
     install_nuget_packages(csproj, NUGET_SIMPLE, sdk_version, cwd=project_dir)
 
-    write_config(config, project_dir)
+    write_config(config, project_dir, name)
     write_program_cs(PROGRAM_CS_SIMPLE, project_dir, name)
 
     # Update appsettings.json with ConnectionStrings
@@ -337,7 +340,7 @@ def init_dotnet_clean_arch_project(config, solution_dir, name):
         install_nuget_packages(csproj, packages, sdk_version, cwd=solution_dir)
 
     create_config_dirs(config, solution_dir)
-    write_config(config, solution_dir)
+    write_config(config, solution_dir, name)
     write_program_cs(PROGRAM_CS_CLEAN_ARCH, os.path.join(solution_dir, "API"), name)
 
 
@@ -770,7 +773,7 @@ def main():
         with open(config_path) as f:
             config = json.load(f)
 
-        project_name = os.path.basename(os.getcwd())
+        project_name = config.pop("ProjectName", os.path.basename(os.getcwd()))
         _hdr("Generating code")
         print(f"  project:   {_MAG}{project_name}{_RST}")
         print(f"  config:    {_path(config_path)}")
