@@ -10,7 +10,7 @@ table Product {
     id:int? pk;
     name:string(min=0,max=100,length=255);
     amout:double = 0; // default value is zero
-    qty:int(min=0,max=2) = 5 * 4; // computed evaluated by interpretrr
+    qty:int(min=0,max=2) = 5 * 4; // computed evaluated by interpreter
     owner:User;
 }
 
