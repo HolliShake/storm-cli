@@ -326,6 +326,7 @@ def init_dotnet_clean_arch_project(config, solution_dir, name):
 
     run_dotnet(["add", "APPLICATION/APPLICATION.csproj", "reference", "DOMAIN/DOMAIN.csproj"], cwd=solution_dir)
     run_dotnet(["add", "INFRASTRUCTURE/INFRASTRUCTURE.csproj", "reference", "APPLICATION/APPLICATION.csproj"], cwd=solution_dir)
+    run_dotnet(["add", "API/API.csproj", "reference", "DOMAIN/DOMAIN.csproj"], cwd=solution_dir)
     run_dotnet(["add", "API/API.csproj", "reference", "APPLICATION/APPLICATION.csproj"], cwd=solution_dir)
     run_dotnet(["add", "API/API.csproj", "reference", "INFRASTRUCTURE/INFRASTRUCTURE.csproj"], cwd=solution_dir)
 
