@@ -712,9 +712,1084 @@ using {model_ns};
             f.write(content)
         print(f"  [ok] {file_path}")
 
+    # ── PHP / Laravel helpers ────────────────────────────────────────
+
+    STORM_TO_PHP = {
+        "int": "int", "long": "int", "float": "float", "double": "float",
+        "string": "string", "bool": "bool", "uuid": "string", "datetime": "\\DateTime",
+    }
+
+    STORM_TO_OA_TYPE = {
+        "int": "integer", "long": "integer", "float": "number", "double": "number",
+        "string": "string", "bool": "boolean", "uuid": "string", "datetime": "string",
+    }
+
+    STORM_TO_MIGRATION = {
+        "int": "integer", "long": "bigInteger", "float": "float", "double": "double",
+        "string": "string", "bool": "boolean", "uuid": "uuid", "datetime": "dateTime",
+    }
+
+    @staticmethod
+    def _snake_case(name):
+        """Convert PascalCase or camelCase to snake_case."""
+        result = []
+        for i, ch in enumerate(name):
+            if ch.isupper():
+                if i > 0:
+                    result.append("_")
+                result.append(ch.lower())
+            else:
+                result.append(ch)
+        return "".join(result)
+
+    def _field_php_type(self, field_node):
+        """Return (php_type, is_enum, enum_name, is_fk, fk_table)."""
+        type_node = field_node.b
+        type_name = type_node.value.rstrip("?")
+        is_nullable = type_node.value.endswith("?")
+
+        if type_name in self.STORM_TO_PHP:
+            php = self.STORM_TO_PHP[type_name]
+            if is_nullable and php != "string":
+                return (f"?{php}", False, None, False, None)
+            return (php, False, None, False, None)
+
+        if type_name in self.tables:
+            ref_pk_type = self._get_pk_type(self.tables[type_name])
+            php_pk = self.STORM_TO_PHP.get(ref_pk_type, "int")
+            return (php_pk, False, None, True, type_name)
+
+        if type_name in self.enums:
+            enum_name = type_name
+            if is_nullable:
+                return (f"?{enum_name}", True, enum_name, False, None)
+            return (enum_name, True, enum_name, False, None)
+
+        return ("mixed", False, None, False, None)
+
+    def _field_oa_type(self, field_node):
+        """Return (oa_type, oa_format, is_enum)."""
+        type_node = field_node.b
+        type_name = type_node.value.rstrip("?")
+
+        if type_name in self.STORM_TO_OA_TYPE:
+            oa = self.STORM_TO_OA_TYPE[type_name]
+            fmt = "date-time" if type_name == "datetime" else None
+            return (oa, fmt, False)
+
+        if type_name in self.tables:
+            return ("object", None, False)
+
+        if type_name in self.enums:
+            return ("string", None, True)
+
+        return ("string", None, False)
+
+    # ── PHP Enum generator ───────────────────────────────────────────
+
+    def _generate_php_enum(self, enum_node):
+        name = enum_node.a.value
+        lines = [
+            "<?php",
+            "",
+            "namespace App\\Static;",
+            "",
+            "use OpenApi\\Attributes as OA;",
+            "",
+            f"#[OA\\Schema(",
+            f"    schema: \"{name}\",",
+            f"    title: \"{name}\",",
+            f"    type: \"string\",",
+            f"    enum: {name}::class,",
+            f")]",
+            f"enum {name}: string",
+            "{",
+        ]
+
+        cur = enum_node.b
+        first = True
+        while cur:
+            key = cur.a.value
+            value = cur.b.value if cur.b else ""
+            if first:
+                lines.append(f"    case {key} = \"{value}\";")
+                first = False
+            else:
+                lines.append(f"    case {key} = \"{value}\";")
+            cur = cur.next
+
+        lines.append("}")
+        return "\n".join(lines)
+
+    # ── PHP Model generator ──────────────────────────────────────────
+
+    def _generate_php_model_oa_schemas(self, table_node):
+        """Generate #[OA\Schema] annotations for a model."""
+        name = table_node.a.value
+        table_pascal = self._pascal_case(name)
+
+        required_fields = []
+        property_attrs = []
+
+        f = table_node.b
+        while f:
+            field_name = self._snake_case(f.a.value)
+            oa_type, oa_format, is_enum = self._field_oa_type(f)
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            is_nullable = type_node.value.endswith("?")
+
+            # Determine if required
+            pk = self._get_pk_field(table_node)
+            is_pk = (pk is not None and f.a.value == pk.a.value)
+
+            if not is_nullable and not is_pk:
+                required_fields.append(field_name)
+            elif type_name == "datetime":
+                required_fields.append(field_name)
+
+            # Build property
+            if is_enum:
+                prop = f"        new OA\\Property(property: \"{field_name}\", type: \"{oa_type}\"),"
+            elif oa_format:
+                prop = f"        new OA\\Property(property: \"{field_name}\", type: \"{oa_type}\", format: \"{oa_format}\"),"
+            elif type_name in self.tables:
+                # FK property — reference the related model
+                ref_name = type_name
+                prop = f"        new OA\\Property(property: \"{field_name}\", ref: \"#/components/schemas/{ref_name}\"),"
+                # Also add the FK id column if not already present
+                fk_col = f"{field_name}_id"
+                # Only add FK id if it's NOT already in the property list AND not a PK
+                fk_already = False
+                f2 = table_node.b
+                while f2:
+                    if self._snake_case(f2.a.value) == fk_col:
+                        fk_already = True
+                        break
+                    f2 = f2.next
+                if not fk_already:
+                    fk_pk = self._get_pk_type(self.tables[type_name])
+                    fk_oa = self.STORM_TO_OA_TYPE.get(fk_pk, "integer")
+                    property_attrs.append(
+                        f"        new OA\\Property(property: \"{fk_col}\", type: \"{fk_oa}\"),"
+                    )
+            else:
+                nullable_suffix = ", nullable: true" if is_nullable else ""
+                prop = f"        new OA\\Property(property: \"{field_name}\", type: \"{oa_type}\"{nullable_suffix}),"
+
+            property_attrs.append(prop)
+            f = f.next
+
+        required_str = ",\n        ".join(f'"{r}"' for r in required_fields)
+        if required_str:
+            required_block = f"    required: [\n        {required_str}\n    ],"
+        else:
+            required_block = ""
+
+        properties_block = "\n".join(property_attrs)
+
+        oa_schemas = f"""
+#[OA\\Schema(
+    schema: "{table_pascal}",
+    title: "{table_pascal}",
+    type: "object",
+{required_block}
+    properties: [
+{properties_block}
+    ]
+)]
+
+#[OA\\Schema(
+    schema: "Paginated{table_pascal}",
+    title: "Paginated{table_pascal}",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "data", type: "array", items: new OA\\Items(ref: "#/components/schemas/{table_pascal}")),
+        new OA\\Property(property: "current_page", type: "integer"),
+        new OA\\Property(property: "last_page", type: "integer"),
+        new OA\\Property(property: "per_page", type: "integer"),
+        new OA\\Property(property: "total", type: "integer"),
+        new OA\\Property(property: "from", type: "integer", nullable: true),
+        new OA\\Property(property: "to", type: "integer", nullable: true),
+    ]
+)]
+
+#[OA\\Schema(
+    schema: "Paginated{table_pascal}Response200",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: true),
+        new OA\\Property(property: "data", ref: "#/components/schemas/Paginated{table_pascal}")
+    ]
+)]
+
+#[OA\\Schema(
+    schema: "Get{table_pascal}Response200",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: true),
+        new OA\\Property(property: "data", ref: "#/components/schemas/{table_pascal}")
+    ]
+)]
+
+#[OA\\Schema(
+    schema: "Get{table_pascal}sResponse200",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: true),
+        new OA\\Property(property: "data", type: "array", items: new OA\\Items(ref: "#/components/schemas/{table_pascal}"))
+    ]
+)]
+
+#[OA\\Schema(
+    schema: "Create{table_pascal}Response200",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: true),
+        new OA\\Property(property: "data", ref: "#/components/schemas/{table_pascal}")
+    ]
+)]
+
+#[OA\\Schema(
+    schema: "Update{table_pascal}Response200",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: true),
+        new OA\\Property(property: "data", ref: "#/components/schemas/{table_pascal}")
+    ]
+)]
+
+#[OA\\Schema(
+    schema: "Delete{table_pascal}Response200",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: true)
+    ]
+)]"""
+        return oa_schemas
+
+    def _generate_php_model(self, table_node, namespace):
+        name = table_node.a.value
+        table_snake = self._snake_case(name)
+
+        lines = [
+            "<?php",
+            "",
+            "namespace App\\Models;",
+            "",
+            "use Illuminate\\Database\\Eloquent\\Model;",
+            "use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;",
+            "use Illuminate\\Database\\Eloquent\\Relations\\HasMany;",
+            "use OpenApi\\Attributes as OA;",
+        ]
+
+        # Add enum imports
+        used_enums = self._table_uses_enums(table_node)
+        for enum_name in used_enums:
+            lines.append(f"use App\\Static\\{enum_name};")
+
+        lines.append("")
+
+        # OA Schemas
+        lines.append(self._generate_php_model_oa_schemas(table_node).strip())
+
+        lines.append(f"class {name} extends Model")
+        lines.append("{")
+
+        # $table
+        lines.append(f"    protected $table = '{table_snake}';")
+
+        # $fillable
+        fillable = []
+        f = table_node.b
+        pk = self._get_pk_field(table_node)
+        while f:
+            field_name = self._snake_case(f.a.value)
+            if pk and f.a.value == pk.a.value:
+                pass  # Skip PK from fillable
+            else:
+                type_node = f.b
+                type_name = type_node.value.rstrip("?")
+                if type_name in self.tables:
+                    fillable.append(f"{field_name}_id")
+                else:
+                    fillable.append(field_name)
+            f = f.next
+        if fillable:
+            fillable_str = "', '".join(fillable)
+            lines.append(f"    protected $fillable = ['{fillable_str}'];")
+
+        # $casts — enum fields
+        casts = []
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.enums:
+                field_name = self._snake_case(f.a.value)
+                casts.append(f"        '{field_name}' => {type_name}::class,")
+            elif type_name == "datetime":
+                field_name = self._snake_case(f.a.value)
+                casts.append(f"        '{field_name}' => 'datetime',")
+            f = f.next
+
+        if casts:
+            lines.append("")
+            lines.append("    protected function casts(): array")
+            lines.append("    {")
+            lines.append("        return [")
+            lines.extend(casts)
+            lines.append("        ];")
+            lines.append("    }")
+
+        # Relationships
+        f = table_node.b
+        has_relations = False
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.tables:
+                if not has_relations:
+                    lines.append("")
+                    has_relations = True
+                field_name = self._snake_case(f.a.value)
+                camel = field_name
+                # Convert snake_case to camelCase for method name
+                parts = field_name.split("_")
+                camel_method = parts[0] + "".join(p.title() for p in parts[1:])
+                lines.append(f"    public function {camel_method}(): BelongsTo")
+                lines.append("    {")
+                lines.append(f"        return $this->belongsTo({type_name}::class, '{field_name}_id');")
+                lines.append("    }")
+                lines.append("")
+            f = f.next
+
+        lines.append("}")
+        return "\n".join(lines)
+
+    # ── PHP Controller generator ─────────────────────────────────────
+
+    def _generate_php_controller(self, table_node, namespace):
+        name = table_node.a.value
+        table_pascal = self._pascal_case(name)
+        table_snake = self._snake_case(name)
+        table_kebab = self._snake_case(name).replace("_", "-")
+
+        pk = self._get_pk_field(table_node)
+        pk_name = self._snake_case(pk.a.value) if pk else "id"
+        pk_php_type = self._field_php_type(pk)[0] if pk else "int"
+        pk_oa_type = self.STORM_TO_OA_TYPE.get(
+            pk.b.value.rstrip("?") if pk else "int", "integer"
+        )
+
+        # Get filterable FK columns
+        fk_params = []
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.tables:
+                fk_col = self._snake_case(f.a.value) + "_id"
+                fk_name = type_name  # PascalCase for tag
+                fk_oa_type = self.STORM_TO_OA_TYPE.get(
+                    self._get_pk_type(self.tables[type_name]), "integer"
+                )
+                fk_params.append((fk_col, fk_name, fk_oa_type))
+            f = f.next
+
+        # Build FK parameter annotations
+        fk_param_lines = ""
+        for fk_col, fk_name, fk_oa_type in fk_params:
+            fk_param_lines += f"""
+    #[OA\\Parameter(
+        name: "filter[{fk_col}]",
+        in: "query",
+        description: "Filter by {fk_name} ID",
+        required: false,
+        schema: new OA\\Schema(type: "{fk_oa_type}")
+    )]"""
+
+        # Build query params for index
+        searchable_text_fields = []
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name == "string":
+                searchable_text_fields.append(self._snake_case(f.a.value))
+            f = f.next
+
+        # Route prefix - lowercase kebab-case
+        route_prefix = table_snake.replace("_", "-")
+
+        code = f"""<?php
+
+namespace App\\Controllers;
+
+use App\\Services\\{table_pascal}Service;
+use Illuminate\\Database\\Eloquent\\ModelNotFoundException;
+use Illuminate\\Http\\JsonResponse;
+use Illuminate\\Http\\Request;
+use Illuminate\\Routing\\Controller;
+use OpenApi\\Attributes as OA;
+
+class {table_pascal}Controller extends Controller
+{{
+    public function __construct(
+        protected {table_pascal}Service $service
+    ) {{
+    }}
+
+    #[OA\\Get(
+        path: "/api/{route_prefix}",
+        summary: "Get paginated list of {table_pascal}",
+        tags: ["{table_pascal}"],
+        description: "Retrieve a paginated list of {table_pascal} with optional search",
+        operationId: "get{table_pascal}Paginated",
+    )]
+    #[OA\\Parameter(
+        name: "search",
+        in: "query",
+        description: "Search term",
+        required: false,
+        schema: new OA\\Schema(type: "string")
+    )]
+    #[OA\\Parameter(
+        name: "page",
+        in: "query",
+        description: "Page number",
+        required: false,
+        schema: new OA\\Schema(type: "integer", default: 1)
+    )]
+    #[OA\\Parameter(
+        name: "rows",
+        in: "query",
+        description: "Number of items per page",
+        required: false,
+        schema: new OA\\Schema(type: "integer", default: 10)
+    )]{fk_param_lines}
+    #[OA\\Response(
+        response: 200,
+        description: "Successful operation",
+        content: new OA\\JsonContent(ref: "#/components/schemas/Paginated{table_pascal}Response200")
+    )]
+    #[OA\\Response(
+        response: 401,
+        description: "Unauthenticated",
+        content: new OA\\JsonContent(ref: "#/components/schemas/UnauthenticatedResponse")
+    )]
+    #[OA\\Response(
+        response: 403,
+        description: "Forbidden",
+        content: new OA\\JsonContent(ref: "#/components/schemas/ForbiddenResponse")
+    )]
+    public function index(Request $request): JsonResponse
+    {{
+        $filters = $request->query('filter', []);
+        $data = $this->service->paginate(
+            $request->query('search'),
+            array_merge($request->only(['page', 'rows']), $filters ? ['filter' => $filters] : [])
+        );
+        return $this->ok($data);
+    }}
+
+    #[OA\\Get(
+        path: "/api/{route_prefix}/{{{pk_name}}}",
+        summary: "Get a specific {table_pascal}",
+        tags: ["{table_pascal}"],
+        description: "Retrieve a {table_pascal} by its ID",
+        operationId: "get{table_pascal}ById",
+    )]
+    #[OA\\Parameter(
+        name: "{pk_name}",
+        in: "path",
+        required: true,
+        schema: new OA\\Schema(type: "{pk_oa_type}")
+    )]
+    #[OA\\Response(
+        response: 200,
+        description: "Successful operation",
+        content: new OA\\JsonContent(ref: "#/components/schemas/Get{table_pascal}Response200")
+    )]
+    #[OA\\Response(
+        response: 401,
+        description: "Unauthenticated",
+        content: new OA\\JsonContent(ref: "#/components/schemas/UnauthenticatedResponse")
+    )]
+    #[OA\\Response(
+        response: 403,
+        description: "Forbidden",
+        content: new OA\\JsonContent(ref: "#/components/schemas/ForbiddenResponse")
+    )]
+    #[OA\\Response(
+        response: 404,
+        description: "{table_pascal} not found"
+    )]
+    public function show(${pk_name}): JsonResponse
+    {{
+        try {{
+            return $this->ok($this->service->getById(${pk_name}));
+        }} catch (ModelNotFoundException $e) {{
+            return $this->notFound('{table_pascal} not found');
+        }}
+    }}
+
+    #[OA\\Post(
+        path: "/api/{route_prefix}/create",
+        summary: "Create a new {table_pascal}",
+        tags: ["{table_pascal}"],
+        description: "Create a new {table_pascal} with the provided details",
+        operationId: "create{table_pascal}",
+    )]
+    #[OA\\RequestBody(
+        required: true,
+        content: new OA\\JsonContent(ref: "#/components/schemas/{table_pascal}")
+    )]
+    #[OA\\Response(
+        response: 200,
+        description: "{table_pascal} created successfully",
+        content: new OA\\JsonContent(ref: "#/components/schemas/Create{table_pascal}Response200")
+    )]
+    #[OA\\Response(
+        response: 401,
+        description: "Unauthenticated",
+        content: new OA\\JsonContent(ref: "#/components/schemas/UnauthenticatedResponse")
+    )]
+    #[OA\\Response(
+        response: 403,
+        description: "Forbidden",
+        content: new OA\\JsonContent(ref: "#/components/schemas/ForbiddenResponse")
+    )]
+    #[OA\\Response(
+        response: 422,
+        description: "Validation error",
+        content: new OA\\JsonContent(ref: "#/components/schemas/ValidationErrorResponse")
+    )]
+    #[OA\\Response(
+        response: 500,
+        description: "Internal server error",
+        content: new OA\\JsonContent(ref: "#/components/schemas/InternalServerErrorResponse")
+    )]
+    public function store(Request $request): JsonResponse
+    {{
+        $data = $request->validate($this->service->rules());
+        return $this->ok($this->service->create($data));
+    }}
+
+    #[OA\\Put(
+        path: "/api/{route_prefix}/update/{{{pk_name}}}",
+        summary: "Update a {table_pascal}",
+        tags: ["{table_pascal}"],
+        description: "Update an existing {table_pascal} with the provided details",
+        operationId: "update{table_pascal}",
+    )]
+    #[OA\\Parameter(
+        name: "{pk_name}",
+        in: "path",
+        required: true,
+        schema: new OA\\Schema(type: "{pk_oa_type}"),
+    )]
+    #[OA\\RequestBody(
+        required: true,
+        content: new OA\\JsonContent(ref: "#/components/schemas/{table_pascal}")
+    )]
+    #[OA\\Response(
+        response: 200,
+        description: "{table_pascal} updated successfully",
+        content: new OA\\JsonContent(ref: "#/components/schemas/Update{table_pascal}Response200")
+    )]
+    #[OA\\Response(
+        response: 401,
+        description: "Unauthenticated",
+        content: new OA\\JsonContent(ref: "#/components/schemas/UnauthenticatedResponse")
+    )]
+    #[OA\\Response(
+        response: 403,
+        description: "Forbidden",
+        content: new OA\\JsonContent(ref: "#/components/schemas/ForbiddenResponse")
+    )]
+    #[OA\\Response(
+        response: 404,
+        description: "{table_pascal} not found"
+    )]
+    #[OA\\Response(
+        response: 422,
+        description: "Validation error",
+        content: new OA\\JsonContent(ref: "#/components/schemas/ValidationErrorResponse")
+    )]
+    #[OA\\Response(
+        response: 500,
+        description: "Internal server error",
+        content: new OA\\JsonContent(ref: "#/components/schemas/InternalServerErrorResponse")
+    )]
+    public function update(Request $request, ${pk_name}): JsonResponse
+    {{
+        $data = $request->validate($this->service->rules(${pk_name}));
+        try {{
+            return $this->ok($this->service->update(${pk_name}, $data));
+        }} catch (ModelNotFoundException $e) {{
+            return $this->notFound('{table_pascal} not found');
+        }}
+    }}
+
+    #[OA\\Delete(
+        path: "/api/{route_prefix}/delete/{{{pk_name}}}",
+        summary: "Delete a {table_pascal}",
+        tags: ["{table_pascal}"],
+        description: "Delete a {table_pascal} by its ID",
+        operationId: "delete{table_pascal}",
+    )]
+    #[OA\\Parameter(
+        name: "{pk_name}",
+        in: "path",
+        required: true,
+        schema: new OA\\Schema(type: "{pk_oa_type}")
+    )]
+    #[OA\\Response(
+        response: 200,
+        description: "{table_pascal} deleted successfully",
+        content: new OA\\JsonContent(ref: "#/components/schemas/Delete{table_pascal}Response200")
+    )]
+    #[OA\\Response(
+        response: 401,
+        description: "Unauthenticated",
+        content: new OA\\JsonContent(ref: "#/components/schemas/UnauthenticatedResponse")
+    )]
+    #[OA\\Response(
+        response: 403,
+        description: "Forbidden",
+        content: new OA\\JsonContent(ref: "#/components/schemas/ForbiddenResponse")
+    )]
+    #[OA\\Response(
+        response: 404,
+        description: "{table_pascal} not found"
+    )]
+    #[OA\\Response(
+        response: 500,
+        description: "Internal server error",
+        content: new OA\\JsonContent(ref: "#/components/schemas/InternalServerErrorResponse")
+    )]
+    public function destroy(${pk_name}): JsonResponse
+    {{
+        try {{
+            $this->service->delete(${pk_name});
+            return $this->ok(null, '{table_pascal} deleted successfully');
+        }} catch (ModelNotFoundException $e) {{
+            return $this->notFound('{table_pascal} not found');
+        }}
+    }}
+}}"""
+        return code
+
+    # ── PHP Service generator ─────────────────────────────────────────
+
+    def _generate_php_service(self, table_node, namespace):
+        name = table_node.a.value
+        table_pascal = self._pascal_case(name)
+        table_snake = self._snake_case(name)
+
+        # Build validation rules
+        rules_lines = []
+        f = table_node.b
+        pk = self._get_pk_field(table_node)
+        while f:
+            field_name = self._snake_case(f.a.value)
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            is_nullable = type_node.value.endswith("?")
+            if pk and f.a.value == pk.a.value:
+                f = f.next
+                continue
+
+            ts = self.STORM_TO_MIGRATION.get(type_name, "string")
+            rules = []
+            if not is_nullable:
+                rules.append("required")
+            else:
+                rules.append("nullable")
+
+            if ts in ("integer", "bigInteger"):
+                rules.append("integer")
+            elif ts in ("float", "double"):
+                rules.append("numeric")
+            elif ts == "string":
+                rules.append("string")
+                if "max" in (f.b.a.attributes if hasattr(f.b, 'a') and f.b.a else {}) if hasattr(f.b, 'a') else False:
+                    pass  # Could extract max from attrs
+            elif ts == "uuid":
+                rules.append("uuid")
+            elif ts == "boolean":
+                rules.append("boolean")
+            elif ts == "dateTime":
+                rules.append("date")
+
+            if type_name in self.tables:
+                rules.append(f"exists:{self._snake_case(type_name)},id")
+
+            rules_lines.append(f"            '{field_name}' => '{'|'.join(rules)}',")
+            f = f.next
+
+        rules_block = "\n".join(rules_lines)
+
+        # FK fields for filters
+        fk_filters = []
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.tables:
+                fk_col = self._snake_case(f.a.value) + "_id"
+                fk_filters.append(fk_col)
+            f = f.next
+
+        has_filters_line = f"    protected array $filterable = ['" + "', '".join(fk_filters) + "'];" if fk_filters else "    protected array $filterable = [];"
+
+        return f"""<?php
+
+namespace App\\Services;
+
+use App\\Models\\{table_pascal};
+use Illuminate\\Database\\Eloquent\\ModelNotFoundException;
+
+class {table_pascal}Service
+{{
+{has_filters_line}
+
+    /** Searchable text fields. */
+    protected array $searchable = ['name'];
+
+    public function paginate(?string $search = null, array $options = [])
+    {{
+        $query = {table_pascal}::query();
+
+        if ($search && $this->searchable) {{
+            $query->where(function ($q) use ($search) {{
+                foreach ($this->searchable as $field) {{
+                    $q->orWhere($field, 'like', "%{{$search}}%");
+                }}
+            }});
+        }}
+
+        // Apply filters
+        $filters = $options['filter'] ?? [];
+        foreach ($filters as $key => $value) {{
+            if (in_array($key, $this->filterable)) {{
+                $query->where($key, $value);
+            }}
+        }}
+
+        $page = (int)($options['page'] ?? 1);
+        $rows = (int)($options['rows'] ?? 10);
+
+        return $query->paginate($rows, ['*'], 'page', $page);
+    }}
+
+    public function getById($id): {table_pascal}
+    {{
+        return {table_pascal}::findOrFail($id);
+    }}
+
+    public function create(array $data): {table_pascal}
+    {{
+        return {table_pascal}::create($data);
+    }}
+
+    public function update($id, array $data): {table_pascal}
+    {{
+        $model = {table_pascal}::findOrFail($id);
+        $model->update($data);
+        return $model->fresh();
+    }}
+
+    public function delete($id): void
+    {{
+        $model = {table_pascal}::findOrFail($id);
+        $model->delete();
+    }}
+
+    public function rules($id = null): array
+    {{
+        return [
+{rules_block}
+        ];
+    }}
+}}"""
+
+    # ── PHP Migration generator ───────────────────────────────────────
+
+    def _generate_php_migration(self, table_node, namespace):
+        name = table_node.a.value
+        table_snake = self._snake_case(name)
+        table_plural = table_snake + "s"  # Simple plural
+
+        lines = [
+            "<?php",
+            "",
+            "use Illuminate\\Database\\Migrations\\Migration;",
+            "use Illuminate\\Database\\Schema\\Blueprint;",
+            "use Illuminate\\Support\\Facades\\Schema;",
+            "",
+            "return new class extends Migration",
+            "{",
+            "    public function up(): void",
+            "    {",
+            f"        Schema::create('{table_plural}', function (Blueprint $table) {{",
+        ]
+
+        f = table_node.b
+        pk = self._get_pk_field(table_node)
+        has_pk = False
+        while f:
+            field_name = self._snake_case(f.a.value)
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            is_nullable = type_node.value.endswith("?")
+
+            ts = self.STORM_TO_MIGRATION.get(type_name)
+
+            if pk and f.a.value == pk.a.value:
+                # Primary key
+                if ts == "uuid":
+                    lines.append(f"            $table->uuid('{field_name}')->primary();")
+                elif ts == "integer":
+                    lines.append(f"            $table->id('{field_name}');")
+                else:
+                    lines.append(f"            $table->id('{field_name}');")
+                has_pk = True
+            elif type_name in self.tables:
+                # Foreign key
+                lines.append(f"            $table->foreignId('{field_name}_id')->constrained('{self._snake_case(type_name)}s');")
+            elif ts:
+                col_def = f"            $table->{ts}('{field_name}')"
+                if is_nullable:
+                    col_def += "->nullable()"
+                if ts == "string":
+                    max_len = 255
+                    # Check for max attribute
+                    if type_node.a:
+                        attrs_node = type_node.a
+                        if attrs_node and attrs_node.a:
+                            cur = attrs_node.a
+                            while cur:
+                                if cur.a.value == "max":
+                                    try:
+                                        max_len = int(cur.b.value)
+                                    except ValueError:
+                                        pass
+                                cur = cur.next
+                    col_def = f"            $table->string('{field_name}', {max_len})"
+                    if is_nullable:
+                        col_def += "->nullable()"
+                lines.append(col_def + ";")
+            f = f.next
+
+        # Add timestamps if not already present
+        has_created = False
+        has_updated = False
+        f = table_node.b
+        while f:
+            fn = self._snake_case(f.a.value)
+            if fn == "created_at":
+                has_created = True
+            if fn == "updated_at":
+                has_updated = True
+            f = f.next
+        if has_created and has_updated:
+            pass  # Handled by field decls above
+        else:
+            lines.append("            $table->timestamps();")
+
+        lines.append("        });")
+        lines.append("    }")
+        lines.append("")
+        lines.append("    public function down(): void")
+        lines.append("    {")
+        lines.append(f"        Schema::dropIfExists('{table_plural}');")
+        lines.append("    }")
+        lines.append("};")
+
+        return "\n".join(lines)
+
+    # ── PHP Base Controller ───────────────────────────────────────────
+
+    PHP_BASE_CONTROLLER = """<?php
+
+namespace App\\Controllers;
+
+use Illuminate\\Routing\\Controller as BaseController;
+use Illuminate\\Http\\JsonResponse;
+use OpenApi\\Attributes as OA;
+
+#[OA\\Schema(
+    schema: "UnauthenticatedResponse",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: false),
+        new OA\\Property(property: "message", type: "string", example: "Unauthenticated"),
+    ]
+)]
+#[OA\\Schema(
+    schema: "ForbiddenResponse",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: false),
+        new OA\\Property(property: "message", type: "string", example: "Forbidden"),
+    ]
+)]
+#[OA\\Schema(
+    schema: "ValidationErrorResponse",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: false),
+        new OA\\Property(property: "message", type: "string", example: "Validation error"),
+        new OA\\Property(property: "errors", type: "object"),
+    ]
+)]
+#[OA\\Schema(
+    schema: "InternalServerErrorResponse",
+    type: "object",
+    properties: [
+        new OA\\Property(property: "success", type: "boolean", example: false),
+        new OA\\Property(property: "message", type: "string", example: "Internal server error"),
+    ]
+)]
+class Controller extends BaseController
+{
+    protected function ok(mixed $data = null, string $message = 'Success', int $status = 200): JsonResponse
+    {
+        $response = [
+            'success' => true,
+            'message' => $message,
+        ];
+        if ($data !== null) {
+            $response['data'] = $data;
+        }
+        return response()->json($response, $status);
+    }
+
+    protected function notFound(string $message = 'Resource not found'): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'message' => $message,
+        ], 404);
+    }
+}"""
+
+    # ── PHP Route generator ───────────────────────────────────────────
+
+    def _generate_php_routes(self):
+        """Generate routes/api.php with all resource routes."""
+        lines = [
+            "<?php",
+            "",
+            "use Illuminate\\Support\\Facades\\Route;",
+            "use App\\Controllers\\Controller;",
+        ]
+
+        for name in self._ordered:
+            name_pascal = self._pascal_case(name)
+            name_kebab = self._snake_case(name).replace("_", "-")
+            lines.append(f"use App\\Controllers\\{name_pascal}Controller;")
+
+        lines.append("")
+        lines.append("Route::prefix('api')->group(function () {")
+
+        for name in self._ordered:
+            name_pascal = self._pascal_case(name)
+            name_kebab = self._snake_case(name).replace("_", "-")
+            lines.append(f"    Route::get('/{name_kebab}', [{name_pascal}Controller::class, 'index']);")
+            lines.append(f"    Route::get('/{name_kebab}/{{id}}', [{name_pascal}Controller::class, 'show']);")
+            lines.append(f"    Route::post('/{name_kebab}/create', [{name_pascal}Controller::class, 'store']);")
+            lines.append(f"    Route::put('/{name_kebab}/update/{{id}}', [{name_pascal}Controller::class, 'update']);")
+            lines.append(f"    Route::delete('/{name_kebab}/delete/{{id}}', [{name_pascal}Controller::class, 'destroy']);")
+            lines.append("")
+
+        lines.append("});")
+        return "\n".join(lines)
+
+    # ── PHP AppServiceProvider ────────────────────────────────────────
+
+    PHP_APP_SERVICE_PROVIDER = """<?php
+
+namespace App\\Providers;
+
+use Illuminate\\Support\\ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        // Bind services here
+    }
+
+    public function boot(): void
+    {
+        //
+    }
+}"""
+
     # ── entry point ──────────────────────────────────────────────────
 
     def generate(self, config, project_name, output_dir="."):
+        # Detect template: Laravel = MigrationsPath present, C# = DbContextPath
+        is_laravel = "MigrationsPath" in config
+
+        if is_laravel:
+            self._generate_laravel(config, output_dir)
+        else:
+            self._generate_csharp(config, project_name, output_dir)
+
+    def _generate_laravel(self, config, output_dir):
+        """Generate PHP/Laravel code from the schema."""
+        print("\nGenerating Laravel PHP code...")
+
+        # ── Base Controller ───────────────────────────────────────────
+        self._write_file(
+            output_dir, "app/Http/Controllers", "Controller.php",
+            self.PHP_BASE_CONTROLLER,
+        )
+
+        # ── Enums ─────────────────────────────────────────────────────
+        for enum_node in self.enums.values():
+            enum_code = self._generate_php_enum(enum_node)
+            ename = enum_node.a.value
+            self._write_file(output_dir, config["EnumPath"], f"{ename}.php", enum_code)
+
+        # ── Per-table files ───────────────────────────────────────────
+        for name in self._ordered:
+            node = self.tables[name]
+
+            # Model
+            model_code = self._generate_php_model(node, config["ModelPath"])
+            self._write_file(output_dir, config["ModelPath"], f"{name}.php", model_code)
+
+            # Service
+            svc_code = self._generate_php_service(node, config["ServicePath"])
+            self._write_file(output_dir, config["ServicePath"], f"{name}Service.php", svc_code)
+
+            # Controller
+            ctrl_code = self._generate_php_controller(node, config["ControllerPath"])
+            self._write_file(output_dir, config["ControllerPath"], f"{name}Controller.php", ctrl_code)
+
+            # Migration
+            mig_code = self._generate_php_migration(node, config["MigrationsPath"])
+            # Migration filename uses timestamp prefix
+            import datetime
+            ts = datetime.datetime.now().strftime("%Y_%m_%d_%H%M%S")
+            table_snake = self._snake_case(name)
+            mig_filename = f"{ts}_create_{table_snake}s_table.php"
+            self._write_file(output_dir, config["MigrationsPath"], mig_filename, mig_code)
+
+        # ── Routes ────────────────────────────────────────────────────
+        routes_code = self._generate_php_routes()
+        self._write_file(output_dir, "routes", "api.php", routes_code)
+
+        print("  [ok] code generation complete")
+        return
+
+    # ── C# / .NET generation ─────────────────────────────────────
+    def _generate_csharp(self, config, project_name, output_dir):
         ns = self._build_namespaces(config, project_name)
 
         model_ns = ns.get("ModelPath", project_name)
