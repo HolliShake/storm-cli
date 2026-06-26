@@ -37,6 +37,7 @@ using $$config_model_path$$;
 using $$config_dto_path$$;
 using $$config_mapper_path$$;
 using $$config_pagination_path$$;
+using $$config_dbcontext_path$$;
 
 namespace $$config_service_path$$;
 
@@ -45,11 +46,11 @@ public class GenericService<TEntity, TDto, TRequestDto, TKey> : IGenericService<
     where TDto : class
     where TRequestDto : class
 {
-    protected readonly DbContext _context;
+    protected readonly AppDbContext _context;
     protected readonly DbSet<TEntity> _table;
     protected readonly IMapper _mapper;
 
-    public GenericService(DbContext context, IMapper mapper)
+    public GenericService(AppDbContext context, IMapper mapper)
     {
         _context = context;
         _table = context.Set<TEntity>();
