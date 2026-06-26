@@ -561,7 +561,7 @@ public interface I{table_name}Service : IGenericService<{table_name}, {table_nam
 }}
 """
 
-    def _generate_service(self, table_name, namespace, pk_type, service_ns, iservice_ns, model_ns, dto_ns, pagination_ns, enum_ns=""):
+    def _generate_service(self, table_name, namespace, pk_type, service_ns, iservice_ns, model_ns, dto_ns, pagination_ns, dbcontext_ns, enum_ns=""):
         table_node = self.tables[table_name]
         fks = self._get_fk_columns(table_node)
         enum_cols = self._get_enum_columns(table_node)
@@ -596,6 +596,7 @@ public interface I{table_name}Service : IGenericService<{table_name}, {table_nam
 using {iservice_ns};
 using {model_ns};
 using {dto_ns};
+using {dbcontext_ns};
 using Microsoft.EntityFrameworkCore;
 using AutoMapper;
 using AutoMapper.QueryableExtensions;
@@ -604,7 +605,7 @@ namespace {namespace};
 
 public class {table_name}Service : GenericService<{table_name}, {table_name}ResponseDto, {table_name}RequestDto, {pk_type}>, I{table_name}Service
 {{
-    public {table_name}Service(DbContext context, IMapper mapper) : base(context, mapper) {{ }}
+    public {table_name}Service(AppDbContext context, IMapper mapper) : base(context, mapper) {{ }}
 {extra_methods}
 }}
 """
@@ -2131,6 +2132,8 @@ class AppServiceProvider extends ServiceProvider
         enum_ns = ns.get("EnumPath", project_name)
         pagination_ns = f"{dto_ns}.Shared"
 
+        dbcontext_ns = ns.get("DbContextPath", project_name)
+
         _hdr("Generating code...")
 
         # ── base generic files (once) ─────────────────────────────────
@@ -2139,6 +2142,7 @@ class AppServiceProvider extends ServiceProvider
             "config_iservice_path": iservice_ns, "config_service_path": service_ns,
             "config_model_path": model_ns, "config_mapper_path": mapper_ns,
             "config_controller_path": controller_ns,
+            "config_dbcontext_path": dbcontext_ns,
         }
 
         isvc_base = self._substitute_template(GENERIC_ISERVICE_CSHARP, {
@@ -2302,7 +2306,7 @@ app.Run();
             isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, table_dto_ns, pagination_ns, enum_ns)
             self._write_file(output_dir, config.get("IServicesPath", config.get("IServicePath", ".")), f"I{name}Service.cs", isvc_code)
 
-            svc_code = self._generate_service(name, service_ns, pk_type, service_ns, iservice_ns, model_ns, table_dto_ns, pagination_ns, enum_ns)
+            svc_code = self._generate_service(name, service_ns, pk_type, service_ns, iservice_ns, model_ns, table_dto_ns, pagination_ns, dbcontext_ns, enum_ns)
             self._write_file(output_dir, config["ServicePath"], f"{name}Service.cs", svc_code)
 
             ctrl_code = self._generate_controller(name, controller_ns, pk_type, controller_ns, iservice_ns, table_dto_ns, pagination_ns, model_ns, enum_ns)
