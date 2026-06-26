@@ -134,7 +134,7 @@ table Product {
 
 CONFIGS = {
     Template.DOTNETCSHARP.value: {
-        "template": Template.DOTNETCSHARP.value,
+        "Template": Template.DOTNETCSHARP.value,
         "EnumPath": "./Static",
         "ModelPath": "./Models",
         "ControllerPath": "./Controllers",
@@ -145,7 +145,7 @@ CONFIGS = {
         "DbContextPath": "./Data",
     },
     Template.DOTNETCSHARP_CLEANARCHITECTURE.value: {
-        "template": Template.DOTNETCSHARP_CLEANARCHITECTURE.value,
+        "Template": Template.DOTNETCSHARP_CLEANARCHITECTURE.value,
         "EnumPath": "./DOMAIN/Static",
         "ModelPath": "./DOMAIN/Models",
         "ControllerPath": "./API/Controllers",
@@ -156,7 +156,7 @@ CONFIGS = {
         "DbContextPath": "./INFRASTRUCTURE/Data",
     },
     Template.LARAVELPHP.value: {
-        "template": Template.LARAVELPHP.value,
+        "Template": Template.LARAVELPHP.value,
         "EnumPath": "./app/Static",
         "ModelPath": "./app/Models",
         "ControllerPath": "./app/Controllers",

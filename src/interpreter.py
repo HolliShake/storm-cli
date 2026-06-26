@@ -257,6 +257,20 @@ class Interpreter(Parser):
             f = f.next
         return fks
 
+    def _get_enum_columns(self, table_node):
+        """Return list of (field_name, enum_name) for enum-type columns."""
+        enums = []
+        enum_names = set(self.enums.keys())
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in enum_names:
+                field_name = self._pascal_case(f.a.value)
+                enums.append((field_name, type_name))
+            f = f.next
+        return enums
+
     def _get_pk_type(self, table_node):
         pk = self._get_pk_field(table_node)
         if pk is None:
@@ -290,6 +304,13 @@ class Interpreter(Parser):
         if not name:
             return name
         return name[0].upper() + name[1:]
+
+    @staticmethod
+    def _camel_case(name):
+        """lowercase first char — 'Owner' → 'owner', 'ownerId' → 'ownerId'."""
+        if not name:
+            return name
+        return name[0].lower() + name[1:]
 
     def _build_namespaces(self, config, project_name):
         ns = {}
@@ -505,12 +526,15 @@ class Interpreter(Parser):
     def _generate_iservice(self, table_name, namespace, pk_type, iservice_ns, model_ns, dto_ns, pagination_ns):
         table_node = self.tables[table_name]
         fks = self._get_fk_columns(table_node)
+        enum_cols = self._get_enum_columns(table_node)
         extra_methods = ""
         for fk_name, fk_table, fk_pk_type in fks:
             lower_fk = fk_name[0].lower() + fk_name[1:]
             extra_methods += f"\n    public Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{fk_name}Async({fk_pk_type} {lower_fk}Id, PaginateQuery query);"
+        for enum_field, enum_name in enum_cols:
+            extra_methods += f"\n    public Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{enum_field}Async({enum_name} {enum_field}, PaginateQuery query);"
 
-        using_pagination = f"using {pagination_ns};\n" if fks else ""
+        using_pagination = f"using {pagination_ns};\n" if (fks or enum_cols) else ""
 
         return f"""\
 {using_pagination}using {iservice_ns};
@@ -527,6 +551,7 @@ public interface I{table_name}Service : IGenericService<{table_name}, {table_nam
     def _generate_service(self, table_name, namespace, pk_type, service_ns, iservice_ns, model_ns, dto_ns, pagination_ns):
         table_node = self.tables[table_name]
         fks = self._get_fk_columns(table_node)
+        enum_cols = self._get_enum_columns(table_node)
         extra_methods = ""
         for fk_name, fk_table, fk_pk_type in fks:
             lower_fk = fk_name[0].lower() + fk_name[1:]
@@ -539,8 +564,18 @@ public interface I{table_name}Service : IGenericService<{table_name}, {table_nam
             .PaginateAsync(query.Page, query.Rows);
     }}
 """
+        for enum_field, enum_name in enum_cols:
+            extra_methods += f"""
+    public async Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{enum_field}Async({enum_name} {enum_field}, PaginateQuery query)
+    {{
+        var q = _table.Where(e => e.{enum_field} == {enum_field});
+        return await q
+            .ProjectTo<{table_name}ResponseDto>(_mapper.ConfigurationProvider)
+            .PaginateAsync(query.Page, query.Rows);
+    }}
+"""
 
-        using_pagination = f"using {pagination_ns};\n" if fks else ""
+        using_pagination = f"using {pagination_ns};\n" if (fks or enum_cols) else ""
 
         return f"""\
 {using_pagination}using {service_ns};
@@ -563,6 +598,7 @@ public class {table_name}Service : GenericService<{table_name}, {table_name}Resp
     def _generate_controller(self, table_name, namespace, pk_type, controller_ns, iservice_ns, dto_ns, pagination_ns, model_ns):
         table_node = self.tables[table_name]
         fks = self._get_fk_columns(table_node)
+        enum_cols = self._get_enum_columns(table_node)
         pk_route_constraint = self.CSHARP_TO_ROUTE_CONSTRAINT.get(pk_type, "")
         id_route = f"{{id:{pk_route_constraint}}}" if pk_route_constraint else "{id}"
 
@@ -581,6 +617,21 @@ public class {table_name}Service : GenericService<{table_name}, {table_name}Resp
         [FromQuery] PaginateQuery query)
     {{
         var result = await ((I{table_name}Service)_service).PaginateBy{fk_name}Async({lower_fk}Id, query);
+        return Ok(result);
+    }}
+"""
+        for enum_field, enum_name in enum_cols:
+            lower_enum = enum_field[0].lower() + enum_field[1:]
+            extra_endpoints += f"""
+    [HttpGet("{enum_name.lower()}/{{{lower_enum}}}", Name = "Get{table_name}By{enum_field}")]
+    [Tags("{table_name}")]
+    [EndpointSummary("Paginated list by {enum_field}")]
+    [EndpointDescription("Returns a paginated list of {table_name} records filtered by {enum_field} value")]
+    [ProducesResponseType(typeof(PaginatedResult<{table_name}ResponseDto>), StatusCodes.Status200OK)]
+    public virtual async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> IndexBy{enum_field}([FromRoute] {enum_name} {lower_enum},
+        [FromQuery] PaginateQuery query)
+    {{
+        var result = await ((I{table_name}Service)_service).PaginateBy{enum_field}Async({lower_enum}, query);
         return Ok(result);
     }}
 """
@@ -824,7 +875,7 @@ using {model_ns};
     # ── PHP Model generator ──────────────────────────────────────────
 
     def _generate_php_model_oa_schemas(self, table_node):
-        """Generate #[OA\Schema] annotations for a model."""
+        r"""Generate #[OA\Schema] annotations for a model."""
         name = table_node.a.value
         table_pascal = self._pascal_case(name)
 
@@ -968,9 +1019,40 @@ using {model_ns};
 )]"""
         return oa_schemas
 
+    def _get_reverse_fks(self, table_name):
+        """Return list of (other_table, fk_field_name) where other_table has FK to table_name."""
+        reverse = []
+        for other_name, other_node in self.tables.items():
+            if other_name == table_name:
+                continue
+            f = other_node.b
+            while f:
+                type_node = f.b
+                type_name = type_node.value.rstrip("?")
+                if type_name == table_name:
+                    field_name = self._snake_case(f.a.value)
+                    reverse.append((other_name, field_name))
+                f = f.next
+        return reverse
+
     def _generate_php_model(self, table_node, namespace):
         name = table_node.a.value
         table_snake = self._snake_case(name)
+        name_lower = name.lower()
+
+        # Determine which relationships exist
+        has_fk = False
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.tables:
+                has_fk = True
+                break
+            f = f.next
+
+        reverse_fks = self._get_reverse_fks(name)
+        has_has_many = len(reverse_fks) > 0
 
         lines = [
             "<?php",
@@ -978,10 +1060,12 @@ using {model_ns};
             "namespace App\\Models;",
             "",
             "use Illuminate\\Database\\Eloquent\\Model;",
-            "use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;",
-            "use Illuminate\\Database\\Eloquent\\Relations\\HasMany;",
-            "use OpenApi\\Attributes as OA;",
         ]
+        if has_fk:
+            lines.append("use Illuminate\\Database\\Eloquent\\Relations\\BelongsTo;")
+        if has_has_many:
+            lines.append("use Illuminate\\Database\\Eloquent\\Relations\\HasMany;")
+        lines.append("use OpenApi\\Attributes as OA;")
 
         # Add enum imports
         used_enums = self._table_uses_enums(table_node)
@@ -1001,6 +1085,13 @@ using {model_ns};
 
         # $fillable
         fillable = []
+        # Collect all snake_case field names for FK-id dedup
+        all_snake_fields = set()
+        f = table_node.b
+        while f:
+            all_snake_fields.add(self._snake_case(f.a.value))
+            f = f.next
+
         f = table_node.b
         pk = self._get_pk_field(table_node)
         while f:
@@ -1011,7 +1102,9 @@ using {model_ns};
                 type_node = f.b
                 type_name = type_node.value.rstrip("?")
                 if type_name in self.tables:
-                    fillable.append(f"{field_name}_id")
+                    fk_id = f"{field_name}_id"
+                    if fk_id not in all_snake_fields:
+                        fillable.append(fk_id)
                 else:
                     fillable.append(field_name)
             f = f.next
@@ -1042,19 +1135,17 @@ using {model_ns};
             lines.append("        ];")
             lines.append("    }")
 
-        # Relationships
+        # Relationships — BelongsTo (FKs)
+        has_rels = False
         f = table_node.b
-        has_relations = False
         while f:
             type_node = f.b
             type_name = type_node.value.rstrip("?")
             if type_name in self.tables:
-                if not has_relations:
+                if not has_rels:
                     lines.append("")
-                    has_relations = True
+                    has_rels = True
                 field_name = self._snake_case(f.a.value)
-                camel = field_name
-                # Convert snake_case to camelCase for method name
                 parts = field_name.split("_")
                 camel_method = parts[0] + "".join(p.title() for p in parts[1:])
                 lines.append(f"    public function {camel_method}(): BelongsTo")
@@ -1063,6 +1154,17 @@ using {model_ns};
                 lines.append("    }")
                 lines.append("")
             f = f.next
+
+        # Relationships — HasMany (reverse FKs)
+        for other_name, fk_field in reverse_fks:
+            other_snake = self._snake_case(other_name)
+            other_plural = other_snake + "s"
+            method_name = other_plural  # e.g. "products" for Product → User
+            lines.append(f"    public function {method_name}(): HasMany")
+            lines.append("    {")
+            lines.append(f"        return $this->hasMany({other_name}::class, '{fk_field}_id');")
+            lines.append("    }")
+            lines.append("")
 
         lines.append("}")
         return "\n".join(lines)
@@ -1121,6 +1223,130 @@ using {model_ns};
 
         # Route prefix - lowercase kebab-case
         route_prefix = table_snake.replace("_", "-")
+
+        # ── FK paginate-by endpoints (inserted between show() and store()) ─
+        fk_endpoint = ""
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.tables:
+                fk_field_pascal = self._pascal_case(f.a.value)
+                fk_param = self._camel_case(fk_field_pascal) + "Id"  # e.g. ownerId
+                fk_table_pascal = self._pascal_case(type_name)
+                fk_table_lower = type_name.lower()
+                fk_pk_type = self._get_pk_type(self.tables[type_name])
+                fk_oa_param_type = self.STORM_TO_OA_TYPE.get(fk_pk_type, "integer")
+                fk_endpoint += f"""
+    #[OA\\Get(
+        path: "/api/{route_prefix}/{fk_table_lower}/{{{fk_param}}}",
+        summary: "Get paginated list of {table_pascal} by {fk_table_pascal}",
+        tags: ["{table_pascal}"],
+        description: "Retrieve a paginated list of {table_pascal} filtered by {fk_table_pascal} ID",
+        operationId: "get{table_pascal}By{fk_table_pascal}",
+    )]
+    #[OA\\Parameter(
+        name: "{fk_param}",
+        in: "path",
+        required: true,
+        schema: new OA\\Schema(type: "{fk_oa_param_type}")
+    )]
+    #[OA\\Parameter(
+        name: "page",
+        in: "query",
+        description: "Page number",
+        required: false,
+        schema: new OA\\Schema(type: "integer", default: 1)
+    )]
+    #[OA\\Parameter(
+        name: "rows",
+        in: "query",
+        description: "Number of items per page",
+        required: false,
+        schema: new OA\\Schema(type: "integer", default: 10)
+    )]
+    #[OA\\Response(
+        response: 200,
+        description: "Successful operation",
+        content: new OA\\JsonContent(ref: "#/components/schemas/Paginated{table_pascal}Response200")
+    )]
+    #[OA\\Response(
+        response: 401,
+        description: "Unauthenticated",
+        content: new OA\\JsonContent(ref: "#/components/schemas/UnauthenticatedResponse")
+    )]
+    #[OA\\Response(
+        response: 403,
+        description: "Forbidden",
+        content: new OA\\JsonContent(ref: "#/components/schemas/ForbiddenResponse")
+    )]
+    public function indexBy{fk_table_pascal}(${fk_param}): JsonResponse
+    {{
+        $data = $this->service->paginateBy{fk_table_pascal}(${fk_param}, request()->only(['page', 'rows']));
+        return $this->ok($data);
+    }}
+"""
+            f = f.next
+
+        # ── Enum-value paginate-by endpoints ──────────────────────────
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.enums:
+                field_pascal = self._pascal_case(f.a.value)
+                field_snake = self._snake_case(f.a.value)
+                enum_name = type_name
+                fk_endpoint += f"""
+    #[OA\\Get(
+        path: "/api/{route_prefix}/{enum_name.lower()}/{{{field_snake}}}",
+        summary: "Get paginated list of {table_pascal} by {field_pascal}",
+        tags: ["{table_pascal}"],
+        description: "Retrieve a paginated list of {table_pascal} filtered by {field_pascal} value",
+        operationId: "get{table_pascal}By{field_pascal}",
+    )]
+    #[OA\\Parameter(
+        name: "{field_snake}",
+        in: "path",
+        required: true,
+        schema: new OA\\Schema(type: "string")
+    )]
+    #[OA\\Parameter(
+        name: "page",
+        in: "query",
+        description: "Page number",
+        required: false,
+        schema: new OA\\Schema(type: "integer", default: 1)
+    )]
+    #[OA\\Parameter(
+        name: "rows",
+        in: "query",
+        description: "Number of items per page",
+        required: false,
+        schema: new OA\\Schema(type: "integer", default: 10)
+    )]
+    #[OA\\Response(
+        response: 200,
+        description: "Successful operation",
+        content: new OA\\JsonContent(ref: "#/components/schemas/Paginated{table_pascal}Response200")
+    )]
+    #[OA\\Response(
+        response: 401,
+        description: "Unauthenticated",
+        content: new OA\\JsonContent(ref: "#/components/schemas/UnauthenticatedResponse")
+    )]
+    #[OA\\Response(
+        response: 403,
+        description: "Forbidden",
+        content: new OA\\JsonContent(ref: "#/components/schemas/ForbiddenResponse")
+    )]
+    public function indexBy{field_pascal}(${field_snake}): JsonResponse
+    {{
+        $data = $this->service->paginateBy{field_pascal}(${field_snake}, request()->only(['page', 'rows']));
+        return $this->ok($data);
+    }}
+"""
+            f = f.next
 
         code = f"""<?php
 
@@ -1233,7 +1459,7 @@ class {table_pascal}Controller extends Controller
             return $this->notFound('{table_pascal} not found');
         }}
     }}
-
+{fk_endpoint}
     #[OA\\Post(
         path: "/api/{route_prefix}/create",
         summary: "Create a new {table_pascal}",
@@ -1414,8 +1640,16 @@ class {table_pascal}Controller extends Controller
                 rules.append("numeric")
             elif ts == "string":
                 rules.append("string")
-                if "max" in (f.b.a.attributes if hasattr(f.b, 'a') and f.b.a else {}) if hasattr(f.b, 'a') else False:
-                    pass  # Could extract max from attrs
+                # Extract max from attrs if present
+                if type_node.a and type_node.a.a:
+                    cur = type_node.a.a
+                    while cur:
+                        if cur.a.value == "max":
+                            try:
+                                rules.append(f"max:{cur.b.value}")
+                            except (ValueError, AttributeError):
+                                pass
+                        cur = cur.next
             elif ts == "uuid":
                 rules.append("uuid")
             elif ts == "boolean":
@@ -1443,6 +1677,52 @@ class {table_pascal}Controller extends Controller
             f = f.next
 
         has_filters_line = f"    protected array $filterable = ['" + "', '".join(fk_filters) + "'];" if fk_filters else "    protected array $filterable = [];"
+
+        # FK pagination methods (like C# PaginateByOwnerAsync)
+        fk_methods = ""
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.tables:
+                fk_field_pascal = self._pascal_case(f.a.value)
+                fk_param = self._camel_case(fk_field_pascal) + "Id"  # e.g. ownerId
+                fk_db_col = self._snake_case(f.a.value) + "_id"     # e.g. owner_id (DB column)
+                fk_table_pascal = self._pascal_case(type_name)
+                fk_methods += f"""
+    public function paginateBy{fk_table_pascal}(mixed ${fk_param}, array $options = []): \\Illuminate\\Contracts\\Pagination\\LengthAwarePaginator
+    {{
+        $query = {table_pascal}::where('{fk_db_col}', ${fk_param});
+
+        $page = (int)($options['page'] ?? 1);
+        $rows = (int)($options['rows'] ?? 10);
+
+        return $query->paginate($rows, ['*'], 'page', $page);
+    }}
+"""
+            f = f.next
+
+        # Enum pagination methods (like C# PaginateByStatusAsync)
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.enums:
+                field_pascal = self._pascal_case(f.a.value)
+                field_snake = self._snake_case(f.a.value)
+                enum_name = type_name
+                fk_methods += f"""
+    public function paginateBy{field_pascal}(${field_snake}, array $options = []): \\Illuminate\\Contracts\\Pagination\\LengthAwarePaginator
+    {{
+        $query = {table_pascal}::where('{field_snake}', ${field_snake});
+
+        $page = (int)($options['page'] ?? 1);
+        $rows = (int)($options['rows'] ?? 10);
+
+        return $query->paginate($rows, ['*'], 'page', $page);
+    }}
+"""
+            f = f.next
 
         return f"""<?php
 
@@ -1488,7 +1768,7 @@ class {table_pascal}Service
     {{
         return {table_pascal}::findOrFail($id);
     }}
-
+{fk_methods}
     public function create(array $data): {table_pascal}
     {{
         return {table_pascal}::create($data);
@@ -1557,8 +1837,8 @@ class {table_pascal}Service
                     lines.append(f"            $table->id('{field_name}');")
                 has_pk = True
             elif type_name in self.tables:
-                # Foreign key
-                lines.append(f"            $table->foreignId('{field_name}_id')->constrained('{self._snake_case(type_name)}s');")
+                # Foreign key with cascade delete
+                lines.append(f"            $table->foreignId('{field_name}_id')->constrained('{self._snake_case(type_name)}s')->onDelete('cascade');")
             elif ts:
                 col_def = f"            $table->{ts}('{field_name}')"
                 if is_nullable:
@@ -1700,6 +1980,32 @@ class Controller extends BaseController
             name_kebab = self._snake_case(name).replace("_", "-")
             lines.append(f"    Route::get('/{name_kebab}', [{name_pascal}Controller::class, 'index']);")
             lines.append(f"    Route::get('/{name_kebab}/{{id}}', [{name_pascal}Controller::class, 'show']);")
+
+            # FK paginate-by routes
+            node = self.tables[name]
+            f = node.b
+            while f:
+                type_node = f.b
+                type_name = type_node.value.rstrip("?")
+                if type_name in self.tables:
+                    fk_param = self._camel_case(self._pascal_case(f.a.value)) + "Id"  # ownerId
+                    fk_table_lower = type_name.lower()  # user
+                    fk_table_pascal = self._pascal_case(type_name)
+                    lines.append(f"    Route::get('/{name_kebab}/{fk_table_lower}/{{{fk_param}}}', [{name_pascal}Controller::class, 'indexBy{fk_table_pascal}']);")
+                f = f.next
+
+            # Enum-value paginate-by routes
+            f = node.b
+            while f:
+                type_node = f.b
+                type_name = type_node.value.rstrip("?")
+                if type_name in self.enums:
+                    field_snake = self._snake_case(f.a.value)
+                    field_pascal = self._pascal_case(f.a.value)
+                    enum_lower = type_name.lower()
+                    lines.append(f"    Route::get('/{name_kebab}/{enum_lower}/{{{field_snake}}}', [{name_pascal}Controller::class, 'indexBy{field_pascal}']);")
+                f = f.next
+
             lines.append(f"    Route::post('/{name_kebab}/create', [{name_pascal}Controller::class, 'store']);")
             lines.append(f"    Route::put('/{name_kebab}/update/{{id}}', [{name_pascal}Controller::class, 'update']);")
             lines.append(f"    Route::delete('/{name_kebab}/delete/{{id}}', [{name_pascal}Controller::class, 'destroy']);")
@@ -1746,7 +2052,7 @@ class AppServiceProvider extends ServiceProvider
 
         # ── Base Controller ───────────────────────────────────────────
         self._write_file(
-            output_dir, "app/Http/Controllers", "Controller.php",
+            output_dir, config["ControllerPath"], "Controller.php",
             self.PHP_BASE_CONTROLLER,
         )
 
