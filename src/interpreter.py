@@ -708,7 +708,7 @@ using {model_ns};
         dir_path = os.path.join(base_dir, path.lstrip("./"))
         os.makedirs(dir_path, exist_ok=True)
         file_path = os.path.join(dir_path, filename)
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
         print(f"  [ok] {file_path}")
 
@@ -753,6 +753,123 @@ using {model_ns};
         self._write_file(output_dir, config["ControllerPath"], "GenericController.cs", ctrl_base)
         self._write_file(output_dir, config["DtoPath"] + "/Shared", "PaginatedResult.cs", pag_base)
         self._write_file(output_dir, config["DtoPath"] + "/Shared", "PaginateQuery.cs", query_base)
+
+        # ── IServiceMarker (for Scrutor assembly scanning) ────────────
+        # ── Program.cs ───────────────────────────────────────────────
+        is_clean = "IServicesPath" in config
+        proj_ns = project_name
+        first_svc = f"{self._ordered[0]}Service" if self._ordered else "Service"
+        svc_ns = f"{proj_ns}.INFRASTRUCTURE.Services" if is_clean else f"{proj_ns}.Services"
+
+        usings = [
+            "using System.Reflection;",
+            "using Microsoft.AspNetCore.Identity;",
+            "using Microsoft.EntityFrameworkCore;",
+            "using Scrutor;",
+            "using Scalar.AspNetCore;",
+        ]
+        if is_clean:
+            usings += [
+                f"using {proj_ns}.DOMAIN.Models;",
+                f"using {proj_ns}.APPLICATION.IServices;",
+                f"using {proj_ns}.APPLICATION.Dtos.Shared;",
+                f"using {proj_ns}.INFRASTRUCTURE.Data;",
+                f"using {proj_ns}.INFRASTRUCTURE.Services;",
+                f"using {proj_ns}.INFRASTRUCTURE.Mappers;",
+            ]
+        else:
+            usings += [
+                f"using {proj_ns}.Data;",
+                f"using {proj_ns}.IServices;",
+                f"using {proj_ns}.Services;",
+                f"using {proj_ns}.Mappers;",
+                f"using {proj_ns}.Models;",
+            ]
+
+        pg_content = f"""\
+{chr(10).join(usings)}
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// ── Identity ────────────────────────────────────────────────────────
+builder.Services.AddIdentity<User, IdentityRole<Guid>>()
+    .AddEntityFrameworkStores<AppDbContext>()
+    .AddTokenProvider<DataProtectorTokenProvider<User>>(TokenOptions.DefaultProvider)
+    .AddDefaultTokenProviders();
+
+builder.Services.ConfigureApplicationCookie(options =>
+{{
+    options.Cookie.Name = "authToken";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+    options.Cookie.MaxAge = TimeSpan.FromDays(7);
+    options.Cookie.Path = "/";
+    options.Cookie.SameSite = SameSiteMode.None;
+    var isProduction = string.Equals(
+        Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development",
+        "Production", StringComparison.OrdinalIgnoreCase);
+    options.Cookie.SecurePolicy = isProduction
+        ? CookieSecurePolicy.Always
+        : CookieSecurePolicy.SameAsRequest;
+}});
+
+builder.Services.Configure<IdentityOptions>(options =>
+{{
+    options.Password.RequireDigit = false;
+    options.Password.RequireLowercase = false;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequireUppercase = false;
+    options.Password.RequiredLength = 3;
+    options.Password.RequiredUniqueChars = 0;
+    options.User.RequireUniqueEmail = true;
+}});
+
+// Register AutoMapper with the executing assembly
+builder.Services.AddAutoMapper(cfg =>
+{{
+    cfg.AddMaps(Assembly.GetExecutingAssembly());
+}});
+
+// Register all services that inherit from GenericService<,,,> in the assembly of {first_svc}
+builder.Services.Scan(scan => scan
+    .FromAssemblyOf<{first_svc}>()
+    .AddClasses(classes => classes
+        .InNamespaces("{svc_ns}")
+        .AssignableTo(typeof(GenericService<,,,>)))
+    .AsImplementedInterfaces()
+    .WithScopedLifetime());
+
+builder.Services.AddControllers();
+builder.Services.AddOpenApi();
+
+var app = builder.Build();
+
+// ── Swagger / Scalar ────────────────────────────────────────────────
+app.UseSwagger(options =>
+{{
+    options.RouteTemplate = "openapi/{{documentName}}.json";
+}});
+app.MapScalarApiReference(options =>
+{{
+    options.WithTitle("{proj_ns}");
+    options.WithTheme(ScalarTheme.BluePlanet);
+    options.WithDefaultHttpClient(ScalarTarget.JavaScript, ScalarClient.Axios);
+    options.WithPreferredScheme("Bearer");
+}});
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+app.Run();
+"""
+        if is_clean:
+            self._write_file(output_dir, "API", "Program.cs", pg_content)
+        else:
+            self._write_file(output_dir, ".", "Program.cs", pg_content)
 
         # ── AppDbContext ──────────────────────────────────────────────
         dbcontext_ns = ns.get("DbContextPath", project_name)

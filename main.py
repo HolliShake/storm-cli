@@ -143,7 +143,7 @@ CONFIGS = {
         "DbContextPath": "./Data",
     },
     Template.DOTNETCSHARP_CLEANARCHITECTURE.value: {
-        "EnumPath": "./Static",
+        "EnumPath": "./DOMAIN/Static",
         "ModelPath": "./DOMAIN/Models",
         "ControllerPath": "./API/Controllers",
         "DtoPath": "./APPLICATION/Dtos",
@@ -232,6 +232,9 @@ NUGET_SIMPLE = [
 ]
 
 NUGET_CLEAN_ARCH = {
+    "DOMAIN": [
+        ("Microsoft.AspNetCore.Identity.EntityFrameworkCore", True),
+    ],
     "APPLICATION": [
         ("AutoMapper", False),
     ],
@@ -267,6 +270,18 @@ def init_dotnet_project(config, project_dir, name):
     install_nuget_packages(csproj, NUGET_SIMPLE, sdk_version, cwd=project_dir)
 
     write_config(config, project_dir)
+    write_program_cs(PROGRAM_CS_SIMPLE, project_dir, name)
+
+    # Update appsettings.json with ConnectionStrings
+    appsettings = os.path.join(project_dir, "appsettings.json")
+    if os.path.exists(appsettings):
+        with open(appsettings) as f:
+            cfg = json.load(f)
+        cfg.setdefault("ConnectionStrings", {})["DefaultConnection"] = \
+            "Server=(localdb)\\mssqllocaldb;Database=" + name + ";Trusted_Connection=True;MultipleActiveResultSets=true"
+        with open(appsettings, "w") as f:
+            json.dump(cfg, f, indent=2)
+        print("  [ok] appsettings.json patched")
 
 
 def init_dotnet_clean_arch_project(config, solution_dir, name):
@@ -301,6 +316,205 @@ def init_dotnet_clean_arch_project(config, solution_dir, name):
 
     create_config_dirs(config, solution_dir)
     write_config(config, solution_dir)
+    write_program_cs(PROGRAM_CS_CLEAN_ARCH, os.path.join(solution_dir, "API"), name)
+
+
+PROGRAM_CS_SIMPLE = """\
+using System.Reflection;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using Scrutor;
+using Scalar.AspNetCore;
+using $$NAMESPACE$$.Data;
+using $$NAMESPACE$$.IServices;
+using $$NAMESPACE$$.Services;
+using $$NAMESPACE$$.Mappers;
+using $$NAMESPACE$$.Models;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// ── Database ─────────────────────────────────────────────────────────
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// ── Identity ────────────────────────────────────────────────────────
+builder.Services.AddIdentity<User, IdentityRole<Guid>>()
+    .AddEntityFrameworkStores<AppDbContext>()
+    .AddTokenProvider<DataProtectorTokenProvider<User>>(TokenOptions.DefaultProvider)
+    .AddDefaultTokenProviders();
+
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.Cookie.Name = "authToken";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+    options.Cookie.MaxAge = TimeSpan.FromDays(7);
+    options.Cookie.Path = "/";
+    options.Cookie.SameSite = SameSiteMode.None;
+    var isProduction = string.Equals(
+        Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development",
+        "Production", StringComparison.OrdinalIgnoreCase);
+    options.Cookie.SecurePolicy = isProduction
+        ? CookieSecurePolicy.Always
+        : CookieSecurePolicy.SameAsRequest;
+});
+
+builder.Services.Configure<IdentityOptions>(options =>
+{
+    options.Password.RequireDigit = false;
+    options.Password.RequireLowercase = false;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequireUppercase = false;
+    options.Password.RequiredLength = 3;
+    options.Password.RequiredUniqueChars = 0;
+    options.User.RequireUniqueEmail = true;
+});
+
+// ── AutoMapper ──────────────────────────────────────────────────────
+builder.Services.AddAutoMapper(cfg =>
+{
+    cfg.AddMaps(Assembly.GetExecutingAssembly());
+});
+
+// ── Scrutor — register all I*Service → *Service ────────────────────
+builder.Services.Scan(scan => scan
+    .FromAssemblyOf<UserService>()
+    .AddClasses(classes => classes
+        .InNamespaces("$$NAMESPACE$$.Services")
+        .AssignableTo(typeof(GenericService<,,,>)))
+    .AsImplementedInterfaces()
+    .WithScopedLifetime());
+
+// ── Controllers ─────────────────────────────────────────────────────
+builder.Services.AddControllers();
+
+// ── OpenAPI / Scalar ────────────────────────────────────────────────
+builder.Services.AddOpenApi();
+
+var app = builder.Build();
+
+// ── Swagger / Scalar ────────────────────────────────────────────────
+app.UseSwagger(options =>
+{
+    options.RouteTemplate = "openapi/{documentName}.json";
+});
+app.MapScalarApiReference(options =>
+{
+    options.WithTitle("$$NAMESPACE$$");
+    options.WithTheme(ScalarTheme.BluePlanet);
+    options.WithDefaultHttpClient(ScalarTarget.JavaScript, ScalarClient.Axios);
+    options.WithPreferredScheme("Bearer");
+});
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+app.Run();
+"""
+
+PROGRAM_CS_CLEAN_ARCH = """\
+using System.Reflection;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using Scrutor;
+using Scalar.AspNetCore;
+using $$NAMESPACE$$.DOMAIN.Models;
+using $$NAMESPACE$$.APPLICATION.IServices;
+using $$NAMESPACE$$.APPLICATION.Dtos.Shared;
+using $$NAMESPACE$$.INFRASTRUCTURE.Data;
+using $$NAMESPACE$$.INFRASTRUCTURE.Services;
+using $$NAMESPACE$$.INFRASTRUCTURE.Mappers;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// ── Database ─────────────────────────────────────────────────────────
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// ── Identity ────────────────────────────────────────────────────────
+builder.Services.AddIdentity<User, IdentityRole<Guid>>()
+    .AddEntityFrameworkStores<AppDbContext>()
+    .AddTokenProvider<DataProtectorTokenProvider<User>>(TokenOptions.DefaultProvider)
+    .AddDefaultTokenProviders();
+
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.Cookie.Name = "authToken";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+    options.Cookie.MaxAge = TimeSpan.FromDays(7);
+    options.Cookie.Path = "/";
+    options.Cookie.SameSite = SameSiteMode.None;
+    var isProduction = string.Equals(
+        Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development",
+        "Production", StringComparison.OrdinalIgnoreCase);
+    options.Cookie.SecurePolicy = isProduction
+        ? CookieSecurePolicy.Always
+        : CookieSecurePolicy.SameAsRequest;
+});
+
+builder.Services.Configure<IdentityOptions>(options =>
+{
+    options.Password.RequireDigit = false;
+    options.Password.RequireLowercase = false;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequireUppercase = false;
+    options.Password.RequiredLength = 3;
+    options.Password.RequiredUniqueChars = 0;
+    options.User.RequireUniqueEmail = true;
+});
+
+// ── AutoMapper ──────────────────────────────────────────────────────
+builder.Services.AddAutoMapper(cfg =>
+{
+    cfg.AddMaps(Assembly.GetExecutingAssembly());
+});
+
+// ── Scrutor — register all I*Service → *Service ────────────────────
+builder.Services.Scan(scan => scan
+    .FromAssemblyOf<UserService>()
+    .AddClasses(classes => classes
+        .InNamespaces("$$NAMESPACE$$.INFRASTRUCTURE.Services")
+        .AssignableTo(typeof(GenericService<,,,>)))
+    .AsImplementedInterfaces()
+    .WithScopedLifetime());
+
+// ── Controllers ─────────────────────────────────────────────────────
+builder.Services.AddControllers();
+
+// ── OpenAPI / Scalar ────────────────────────────────────────────────
+builder.Services.AddOpenApi();
+
+var app = builder.Build();
+
+// ── Swagger / Scalar ────────────────────────────────────────────────
+app.UseSwagger(options =>
+{
+    options.RouteTemplate = "openapi/{documentName}.json";
+});
+app.MapScalarApiReference(options =>
+{
+    options.WithTitle("$$NAMESPACE$$");
+    options.WithTheme(ScalarTheme.BluePlanet);
+    options.WithDefaultHttpClient(ScalarTarget.JavaScript, ScalarClient.Axios);
+    options.WithPreferredScheme("Bearer");
+});
+
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+app.Run();
+"""
+
+
+def write_program_cs(template: str, project_dir: str, namespace_name: str):
+    content = template.replace("$$NAMESPACE$$", namespace_name)
+    path = os.path.join(project_dir, "Program.cs")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"  [ok] Program.cs updated")
 
 
 COMPOSER_PACKAGES = [
