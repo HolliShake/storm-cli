@@ -16,7 +16,7 @@ public interface IGenericService<TEntity, TDto, TRequestDto, TKey>
     where TRequestDto : class
 {
     public Task<TDto> GetByIdAsync(TKey id);
-    public Task<PaginatedResult<TDto>> PaginateAsync(int page = 1, int rows = 20);
+    public Task<PaginatedResult<TDto>> PaginateAsync(PaginateQuery query);
     public Task<TDto> CreateAsync(TRequestDto item);
     public Task<TDto> UpdateAsync(TKey id, TRequestDto item);
     public Task DeleteAsync(TKey id);
@@ -64,21 +64,21 @@ public class GenericService<TEntity, TDto, TRequestDto, TKey> : IGenericService<
         return _mapper.Map<TDto>(entity);
     }
 
-    public virtual async Task<PaginatedResult<TDto>> PaginateAsync(int page = 1, int rows = 20)
+    public virtual async Task<PaginatedResult<TDto>> PaginateAsync(PaginateQuery query)
     {
-        var query = _table.AsQueryable();
-        var totalCount = await query.CountAsync();
-        var items = await query
-            .Skip((page - 1) * rows)
-            .Take(rows)
+        var q = _table.AsQueryable();
+        var totalCount = await q.CountAsync();
+        var items = await q
+            .Skip((query.Page - 1) * query.Rows)
+            .Take(query.Rows)
             .ProjectTo<TDto>(_mapper.ConfigurationProvider)
             .ToListAsync();
         return new PaginatedResult<TDto>
         {
             Items = items,
             TotalCount = totalCount,
-            Page = page,
-            Rows = rows
+            Page = query.Page,
+            Rows = query.Rows
         };
     }
 

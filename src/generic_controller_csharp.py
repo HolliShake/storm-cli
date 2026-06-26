@@ -43,32 +43,30 @@ public class GenericController<TEntity, TDto, TKey> : GenericController<$Entity$
     where TEntity : class
     where TDto : class
 {
-    [HttpGet("{id}")]
+    [HttpGet("{id}", Name = "Get$Entity$ById")]
     [Tags("$Entity$")]
     [EndpointSummary("Retrieve by id")]
     [EndpointDescription("Returns a single record by its unique identifier")]
     [ProducesResponseType(typeof($TDto$), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public virtual async Task<ActionResult<$TDto$>> Show($TKey$ id)
+    public virtual async Task<ActionResult<$TDto$>> Show([FromRoute] $TKey$ id)
     {
         var result = await _service.GetByIdAsync(id);
         return Ok(result);
     }
 
-    [HttpGet]
+    [HttpGet(Name = "Get$Entity$Paginated")]
     [Tags("$Entity$")]
     [EndpointSummary("Paginated list")]
     [EndpointDescription("Returns a paginated list of records")]
     [ProducesResponseType(typeof(PaginatedResult<$TDto$>), StatusCodes.Status200OK)]
-    public virtual async Task<ActionResult<PaginatedResult<$TDto$>>> Index(
-        [FromQuery] int page = 1,
-        [FromQuery] int rows = 20)
+    public virtual async Task<ActionResult<PaginatedResult<$TDto$>>> Index([FromQuery] PaginateQuery query)
     {
-        var result = await _service.PaginateAsync(page, rows);
+        var result = await _service.PaginateAsync(query);
         return Ok(result);
     }
 
-    [HttpPost]
+    [HttpPost(Name = "Create$Entity$")]
     [Tags("$Entity$")]
     [EndpointSummary("Create new")]
     [EndpointDescription("Creates a new record from the provided payload")]
@@ -80,26 +78,26 @@ public class GenericController<TEntity, TDto, TKey> : GenericController<$Entity$
         return Ok(result);
     }
 
-    [HttpPut("{id}")]
+    [HttpPut("{id}", Name = "Update$Entity$")]
     [Tags("$Entity$")]
     [EndpointSummary("Update by id")]
     [EndpointDescription("Updates an existing record identified by its id with the provided payload")]
     [ProducesResponseType(typeof($TDto$), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public virtual async Task<ActionResult<$TDto$>> Update($TKey$ id, [FromBody] $TRequestDto$ item)
+    public virtual async Task<ActionResult<$TDto$>> Update([FromRoute] $TKey$ id, [FromBody] $TRequestDto$ item)
     {
         var result = await _service.UpdateAsync(id, item);
         return Ok(result);
     }
 
-    [HttpDelete("{id}")]
+    [HttpDelete("{id}", Name = "Delete$Entity$")]
     [Tags("$Entity$")]
     [EndpointSummary("Delete by id")]
     [EndpointDescription("Deletes a record by its unique identifier")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public virtual async Task<IActionResult> Destroy($TKey$ id)
+    public virtual async Task<IActionResult> Destroy([FromRoute] $TKey$ id)
     {
         await _service.DeleteAsync(id);
         return NoContent();

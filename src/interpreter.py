@@ -12,6 +12,7 @@ from src.error_handler import raise_error
 from src.generic_controller_csharp import GENERIC_CONTROLLER_CSHARP, GENERIC_CONTROLLER_TEMPLATE_CSHARP
 from src.generic_mapper_csharp import GENERIC_MAPPER_TEMPLATE_CSHARP
 from src.generic_pagination_csharp import GENERIC_PAGINATION_CSHARP
+from src.generic_query_chsarp import GENERIC_QUERY_CSHARP
 from src.generic_service_csharp import GENERIC_ISERVICE_CSHARP, GENERIC_SERVICE_CSHARP
 from src.parser import Parser
 from src.table import Table
@@ -222,6 +223,11 @@ class Interpreter(Parser):
     STORM_TO_CSHARP = {
         "int": "int", "long": "long", "float": "float", "double": "double",
         "string": "string", "bool": "bool", "uuid": "Guid", "datetime": "DateTime",
+    }
+
+    CSHARP_TO_ROUTE_CONSTRAINT = {
+        "int": "int", "long": "long", "float": "float", "double": "double",
+        "bool": "bool", "Guid": "guid", "DateTime": "datetime",
     }
 
     def _path_to_namespace(self, path, project_name):
@@ -502,7 +508,7 @@ class Interpreter(Parser):
         extra_methods = ""
         for fk_name, fk_table, fk_pk_type in fks:
             lower_fk = fk_name[0].lower() + fk_name[1:]
-            extra_methods += f"\n    public Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{fk_name}Async({fk_pk_type} {lower_fk}Id, int page = 1, int rows = 20);"
+            extra_methods += f"\n    public Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{fk_name}Async({fk_pk_type} {lower_fk}Id, PaginateQuery query);"
 
         using_pagination = f"using {pagination_ns};\n" if fks else ""
 
@@ -525,12 +531,12 @@ public interface I{table_name}Service : IGenericService<{table_name}, {table_nam
         for fk_name, fk_table, fk_pk_type in fks:
             lower_fk = fk_name[0].lower() + fk_name[1:]
             extra_methods += f"""
-    public async Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{fk_name}Async({fk_pk_type} {lower_fk}Id, int page = 1, int rows = 20)
+    public async Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{fk_name}Async({fk_pk_type} {lower_fk}Id, PaginateQuery query)
     {{
-        var query = _table.Where(e => e.{fk_name}Id == {lower_fk}Id);
-        return await query
+        var q = _table.Where(e => e.{fk_name}Id == {lower_fk}Id);
+        return await q
             .ProjectTo<{table_name}ResponseDto>(_mapper.ConfigurationProvider)
-            .PaginateAsync(page, rows);
+            .PaginateAsync(query.Page, query.Rows);
     }}
 """
 
@@ -557,21 +563,24 @@ public class {table_name}Service : GenericService<{table_name}, {table_name}Resp
     def _generate_controller(self, table_name, namespace, pk_type, controller_ns, iservice_ns, dto_ns, pagination_ns, model_ns):
         table_node = self.tables[table_name]
         fks = self._get_fk_columns(table_node)
+        pk_route_constraint = self.CSHARP_TO_ROUTE_CONSTRAINT.get(pk_type, "")
+        id_route = f"{{id:{pk_route_constraint}}}" if pk_route_constraint else "{id}"
 
         extra_endpoints = ""
         for fk_name, fk_table, fk_pk_type in fks:
             lower_fk = fk_name[0].lower() + fk_name[1:]
+            route_constraint = self.CSHARP_TO_ROUTE_CONSTRAINT.get(fk_pk_type, "")
+            typed_param = f"{{{lower_fk}Id}}" if not route_constraint else f"{{{lower_fk}Id:{route_constraint}}}"
             extra_endpoints += f"""
-    [HttpGet("by-{fk_table.lower()}/{{{lower_fk}Id}}")]
+    [HttpGet("{fk_table.lower()}/{typed_param}", Name = "Get{table_name}By{fk_name}")]
     [Tags("{table_name}")]
     [EndpointSummary("Paginated list by {fk_table}")]
     [EndpointDescription("Returns a paginated list of {table_name} records filtered by {fk_table}")]
     [ProducesResponseType(typeof(PaginatedResult<{table_name}ResponseDto>), StatusCodes.Status200OK)]
-    public virtual async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> IndexBy{fk_name}({fk_pk_type} {lower_fk}Id,
-        [FromQuery] int page = 1,
-        [FromQuery] int rows = 20)
+    public virtual async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> IndexBy{fk_name}([FromRoute] {fk_pk_type} {lower_fk}Id,
+        [FromQuery] PaginateQuery query)
     {{
-        var result = await ((I{table_name}Service)_service).PaginateBy{fk_name}Async({lower_fk}Id, page, rows);
+        var result = await ((I{table_name}Service)_service).PaginateBy{fk_name}Async({lower_fk}Id, query);
         return Ok(result);
     }}
 """
@@ -593,32 +602,30 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
 {{
     public {table_name}Controller(I{table_name}Service service) : base(service) {{ }}
 
-    [HttpGet("{{id}}")]
+    [HttpGet("{id_route}", Name = "Get{table_name}ById")]
     [Tags("{table_name}")]
     [EndpointSummary("Retrieve by id")]
     [EndpointDescription("Returns a single {table_name} record by its unique identifier")]
     [ProducesResponseType(typeof({table_name}ResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public virtual async Task<ActionResult<{table_name}ResponseDto>> Show({pk_type} id)
+    public virtual async Task<ActionResult<{table_name}ResponseDto>> Show([FromRoute] {pk_type} id)
     {{
         var result = await _service.GetByIdAsync(id);
         return Ok(result);
     }}
 
-    [HttpGet]
+    [HttpGet(Name = "Get{table_name}Paginated")]
     [Tags("{table_name}")]
     [EndpointSummary("Paginated list")]
     [EndpointDescription("Returns a paginated list of {table_name} records")]
     [ProducesResponseType(typeof(PaginatedResult<{table_name}ResponseDto>), StatusCodes.Status200OK)]
-    public virtual async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> Index(
-        [FromQuery] int page = 1,
-        [FromQuery] int rows = 20)
+    public virtual async Task<ActionResult<PaginatedResult<{table_name}ResponseDto>>> Index([FromQuery] PaginateQuery query)
     {{
-        var result = await _service.PaginateAsync(page, rows);
+        var result = await _service.PaginateAsync(query);
         return Ok(result);
     }}
 {extra_endpoints}
-    [HttpPost]
+    [HttpPost(Name = "Create{table_name}")]
     [Tags("{table_name}")]
     [EndpointSummary("Create new")]
     [EndpointDescription("Creates a new {table_name} record from the provided payload")]
@@ -630,26 +637,26 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
         return Ok(result);
     }}
 
-    [HttpPut("{{id}}")]
+    [HttpPut("{id_route}", Name = "Update{table_name}")]
     [Tags("{table_name}")]
     [EndpointSummary("Update by id")]
     [EndpointDescription("Updates an existing {table_name} record identified by its id with the provided payload")]
     [ProducesResponseType(typeof({table_name}ResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public virtual async Task<ActionResult<{table_name}ResponseDto>> Update({pk_type} id, [FromBody] {table_name}RequestDto item)
+    public virtual async Task<ActionResult<{table_name}ResponseDto>> Update([FromRoute] {pk_type} id, [FromBody] {table_name}RequestDto item)
     {{
         var result = await _service.UpdateAsync(id, item);
         return Ok(result);
     }}
 
-    [HttpDelete("{{id}}")]
+    [HttpDelete("{id_route}", Name = "Delete{table_name}")]
     [Tags("{table_name}")]
     [EndpointSummary("Delete by id")]
     [EndpointDescription("Deletes a {table_name} record by its unique identifier")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public virtual async Task<IActionResult> Destroy({pk_type} id)
+    public virtual async Task<IActionResult> Destroy([FromRoute] {pk_type} id)
     {{
         await _service.DeleteAsync(id);
         return NoContent();
@@ -683,6 +690,8 @@ using {model_ns};
         buf.append("")
 
         for name in self._ordered:
+            if name == "User":
+                continue
             buf.append(f"    public DbSet<{name}> {name}s {{ get; set; }} = null!;")
 
         buf.append("")
@@ -737,11 +746,13 @@ using {model_ns};
             k: v for k, v in base_vars.items() if k in GENERIC_CONTROLLER_CSHARP
         })
         pag_base = self._substitute_template(GENERIC_PAGINATION_CSHARP, {"config_pagination_path": pagination_ns})
+        query_base = self._substitute_template(GENERIC_QUERY_CSHARP, {"config_pagination_path": pagination_ns})
 
         self._write_file(output_dir, config.get("IServicesPath", config.get("IServicePath", ".")), "IGenericService.cs", isvc_base)
         self._write_file(output_dir, config["ServicePath"], "GenericService.cs", svc_base)
         self._write_file(output_dir, config["ControllerPath"], "GenericController.cs", ctrl_base)
         self._write_file(output_dir, config["DtoPath"] + "/Shared", "PaginatedResult.cs", pag_base)
+        self._write_file(output_dir, config["DtoPath"] + "/Shared", "PaginateQuery.cs", query_base)
 
         # ── AppDbContext ──────────────────────────────────────────────
         dbcontext_ns = ns.get("DbContextPath", project_name)

@@ -1,5 +1,25 @@
 # API Starter Kit
 
+```
+███████ ████████  ██████  ██████  ███    ███
+██         ██    ██    ██ ██   ██ ████  ████
+███████    ██    ██    ██ ██████  ██ ████ ██
+     ██    ██    ██    ██ ██   ██ ██  ██  ██
+███████    ██     ██████  ██   ██ ██      ██
+
+
+
+             ██████ ██      ██
+            ██      ██      ██
+            ██      ██      ██
+            ██      ██      ██
+             ██████ ███████ ██
+
+
+
+  API Starter Kit — schema to source
+```
+
 A CLI tool that scaffolds full-stack API projects from a declarative schema file. Define your data model once in `.storm` format and generate complete C# or PHP backend code with zero boilerplate.
 
 ## Quick Start
