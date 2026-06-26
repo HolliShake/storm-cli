@@ -13,6 +13,18 @@ from src.generic_controller_csharp import GENERIC_CONTROLLER_CSHARP, GENERIC_CON
 from src.generic_mapper_csharp import GENERIC_MAPPER_TEMPLATE_CSHARP
 from src.generic_pagination_csharp import GENERIC_PAGINATION_CSHARP
 from src.generic_query_chsarp import GENERIC_QUERY_CSHARP
+
+# ─── ANSI colors ───────────────────────────────────────────────────────────
+_RST = "\033[0m"
+_BLD = "\033[1m"
+_GRN = "\033[32m"
+_MAG = "\033[35m"
+
+def _ok(msg):
+    print(f"  {_GRN}{_BLD}[ok]{_RST} {msg}")
+
+def _hdr(msg):
+    print(f"\n{_MAG}{_BLD}{msg}{_RST}")
 from src.generic_service_csharp import GENERIC_ISERVICE_CSHARP, GENERIC_SERVICE_CSHARP
 from src.parser import Parser
 from src.table import Table
@@ -523,7 +535,7 @@ class Interpreter(Parser):
 
     # ── template generators ──────────────────────────────────────────
 
-    def _generate_iservice(self, table_name, namespace, pk_type, iservice_ns, model_ns, dto_ns, pagination_ns):
+    def _generate_iservice(self, table_name, namespace, pk_type, iservice_ns, model_ns, dto_ns, pagination_ns, enum_ns=""):
         table_node = self.tables[table_name]
         fks = self._get_fk_columns(table_node)
         enum_cols = self._get_enum_columns(table_node)
@@ -535,9 +547,10 @@ class Interpreter(Parser):
             extra_methods += f"\n    public Task<PaginatedResult<{table_name}ResponseDto>> PaginateBy{enum_field}Async({enum_name} {enum_field}, PaginateQuery query);"
 
         using_pagination = f"using {pagination_ns};\n" if (fks or enum_cols) else ""
+        using_enum = f"using {enum_ns};\n" if enum_cols else ""
 
         return f"""\
-{using_pagination}using {iservice_ns};
+{using_enum}{using_pagination}using {iservice_ns};
 using {model_ns};
 using {dto_ns};
 
@@ -548,7 +561,7 @@ public interface I{table_name}Service : IGenericService<{table_name}, {table_nam
 }}
 """
 
-    def _generate_service(self, table_name, namespace, pk_type, service_ns, iservice_ns, model_ns, dto_ns, pagination_ns):
+    def _generate_service(self, table_name, namespace, pk_type, service_ns, iservice_ns, model_ns, dto_ns, pagination_ns, enum_ns=""):
         table_node = self.tables[table_name]
         fks = self._get_fk_columns(table_node)
         enum_cols = self._get_enum_columns(table_node)
@@ -576,9 +589,10 @@ public interface I{table_name}Service : IGenericService<{table_name}, {table_nam
 """
 
         using_pagination = f"using {pagination_ns};\n" if (fks or enum_cols) else ""
+        using_enum = f"using {enum_ns};\n" if enum_cols else ""
 
         return f"""\
-{using_pagination}using {service_ns};
+{using_enum}{using_pagination}using {service_ns};
 using {iservice_ns};
 using {model_ns};
 using {dto_ns};
@@ -595,7 +609,7 @@ public class {table_name}Service : GenericService<{table_name}, {table_name}Resp
 }}
 """
 
-    def _generate_controller(self, table_name, namespace, pk_type, controller_ns, iservice_ns, dto_ns, pagination_ns, model_ns):
+    def _generate_controller(self, table_name, namespace, pk_type, controller_ns, iservice_ns, dto_ns, pagination_ns, model_ns, enum_ns=""):
         table_node = self.tables[table_name]
         fks = self._get_fk_columns(table_node)
         enum_cols = self._get_enum_columns(table_node)
@@ -636,10 +650,12 @@ public class {table_name}Service : GenericService<{table_name}, {table_name}Resp
     }}
 """
 
+        using_enum = f"using {enum_ns};\n" if enum_cols else ""
+
         return f"""\
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
-using {controller_ns};
+{using_enum}using {controller_ns};
 using {iservice_ns};
 using {dto_ns};
 using {pagination_ns};
@@ -761,7 +777,7 @@ using {model_ns};
         file_path = os.path.join(dir_path, filename)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
-        print(f"  [ok] {file_path}")
+        _ok(file_path)
 
     # ── PHP / Laravel helpers ────────────────────────────────────────
 
@@ -2048,7 +2064,7 @@ class AppServiceProvider extends ServiceProvider
 
     def _generate_laravel(self, config, output_dir):
         """Generate PHP/Laravel code from the schema."""
-        print("\nGenerating Laravel PHP code...")
+        _hdr("Generating Laravel PHP code...")
 
         # ── Base Controller ───────────────────────────────────────────
         self._write_file(
@@ -2091,12 +2107,20 @@ class AppServiceProvider extends ServiceProvider
         routes_code = self._generate_php_routes()
         self._write_file(output_dir, "routes", "api.php", routes_code)
 
-        print("  [ok] code generation complete")
+        _ok("code generation complete")
         return
 
     # ── C# / .NET generation ─────────────────────────────────────
     def _generate_csharp(self, config, project_name, output_dir):
         ns = self._build_namespaces(config, project_name)
+
+        is_clean = "IServicesPath" in config
+        if is_clean:
+            # Clean architecture: each layer project (DOMAIN, APPLICATION,
+            # INFRASTRUCTURE, API) is its own assembly with its own root
+            # namespace matching the layer name — do NOT prefix with project_name.
+            prefix = f"{project_name}."
+            ns = {k: v[len(prefix):] if v.startswith(prefix) else v for k, v in ns.items()}
 
         model_ns = ns.get("ModelPath", project_name)
         dto_ns = ns.get("DtoPath", project_name)
@@ -2107,7 +2131,7 @@ class AppServiceProvider extends ServiceProvider
         enum_ns = ns.get("EnumPath", project_name)
         pagination_ns = f"{dto_ns}.Shared"
 
-        print("\nGenerating code...")
+        _hdr("Generating code...")
 
         # ── base generic files (once) ─────────────────────────────────
         base_vars = {
@@ -2135,12 +2159,12 @@ class AppServiceProvider extends ServiceProvider
         self._write_file(output_dir, config["DtoPath"] + "/Shared", "PaginatedResult.cs", pag_base)
         self._write_file(output_dir, config["DtoPath"] + "/Shared", "PaginateQuery.cs", query_base)
 
-        # ── IServiceMarker (for Scrutor assembly scanning) ────────────
         # ── Program.cs ───────────────────────────────────────────────
         is_clean = "IServicesPath" in config
         proj_ns = project_name
         first_svc = f"{self._ordered[0]}Service" if self._ordered else "Service"
-        svc_ns = f"{proj_ns}.INFRASTRUCTURE.Services" if is_clean else f"{proj_ns}.Services"
+        svc_ns = service_ns
+        dbcontext_ns = ns.get("DbContextPath", project_name)
 
         usings = [
             "using System.Reflection;",
@@ -2151,12 +2175,12 @@ class AppServiceProvider extends ServiceProvider
         ]
         if is_clean:
             usings += [
-                f"using {proj_ns}.DOMAIN.Models;",
-                f"using {proj_ns}.APPLICATION.IServices;",
-                f"using {proj_ns}.APPLICATION.Dtos.Shared;",
-                f"using {proj_ns}.INFRASTRUCTURE.Data;",
-                f"using {proj_ns}.INFRASTRUCTURE.Services;",
-                f"using {proj_ns}.INFRASTRUCTURE.Mappers;",
+                f"using {model_ns};",
+                f"using {iservice_ns};",
+                f"using {dto_ns}.Shared;",
+                f"using {dbcontext_ns};",
+                f"using {service_ns};",
+                f"using {mapper_ns};",
             ]
         else:
             usings += [
@@ -2238,7 +2262,7 @@ app.MapScalarApiReference(options =>
     options.WithTitle("{proj_ns}");
     options.WithTheme(ScalarTheme.BluePlanet);
     options.WithDefaultHttpClient(ScalarTarget.JavaScript, ScalarClient.Axios);
-    options.WithPreferredScheme("Bearer");
+    options.AddPreferredSecuritySchemes("Bearer");
 }});
 
 app.UseHttpsRedirection();
@@ -2253,7 +2277,6 @@ app.Run();
             self._write_file(output_dir, ".", "Program.cs", pg_content)
 
         # ── AppDbContext ──────────────────────────────────────────────
-        dbcontext_ns = ns.get("DbContextPath", project_name)
         dbcontext_code = self._generate_appdbcontext(dbcontext_ns, model_ns)
         self._write_file(output_dir, config["DbContextPath"], "AppDbContext.cs", dbcontext_code)
 
@@ -2276,13 +2299,13 @@ app.Run();
             simp_code = self._generate_response_simplified_dto(node, table_dto_ns, enum_ns)
             self._write_file(output_dir, table_dto_path, f"{name}ResponseSimplifiedDto.cs", simp_code)
 
-            isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, table_dto_ns, pagination_ns)
+            isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, table_dto_ns, pagination_ns, enum_ns)
             self._write_file(output_dir, config.get("IServicesPath", config.get("IServicePath", ".")), f"I{name}Service.cs", isvc_code)
 
-            svc_code = self._generate_service(name, service_ns, pk_type, service_ns, iservice_ns, model_ns, table_dto_ns, pagination_ns)
+            svc_code = self._generate_service(name, service_ns, pk_type, service_ns, iservice_ns, model_ns, table_dto_ns, pagination_ns, enum_ns)
             self._write_file(output_dir, config["ServicePath"], f"{name}Service.cs", svc_code)
 
-            ctrl_code = self._generate_controller(name, controller_ns, pk_type, controller_ns, iservice_ns, table_dto_ns, pagination_ns, model_ns)
+            ctrl_code = self._generate_controller(name, controller_ns, pk_type, controller_ns, iservice_ns, table_dto_ns, pagination_ns, model_ns, enum_ns)
             self._write_file(output_dir, config["ControllerPath"], f"{name}Controller.cs", ctrl_code)
 
             map_code = self._generate_mapper(name, mapper_ns, model_ns, table_dto_ns)
@@ -2294,7 +2317,7 @@ app.Run();
             ename = enum_node.a.value
             self._write_file(output_dir, config["EnumPath"], f"{ename}.cs", enum_code)
 
-        print("  [ok] code generation complete")
+        _ok("code generation complete")
 
 
 

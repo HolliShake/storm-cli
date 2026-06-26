@@ -302,45 +302,45 @@ class TestDotnetCleanArchitecture:
 
     def test_user_model_clean_ns(self):
         _assert_file_contains(str(self.tmp), "./DOMAIN/Models/User.cs",
-            "CleanApp.DOMAIN.Models", "IdentityUser<Guid>")
+            "DOMAIN.Models", "IdentityUser<Guid>")
 
     def test_item_model_clean_ns(self):
         _assert_file_contains(str(self.tmp), "./DOMAIN/Models/Item.cs",
-            "CleanApp.DOMAIN.Models")
+            "DOMAIN.Models")
 
     # ── DTOs in APPLICATION ──────────────────────────────────────────
 
     def test_dto_clean_ns(self):
         _assert_file_contains(str(self.tmp), "./APPLICATION/Dtos/ItemDto/ItemRequestDto.cs",
-            "CleanApp.APPLICATION.Dtos.ItemDto")
+            "APPLICATION.Dtos.ItemDto")
 
     # ── iservice in APPLICATION ──────────────────────────────────────
 
     def test_iservice_clean_ns(self):
         _assert_file_contains(str(self.tmp), "./APPLICATION/IServices/IItemService.cs",
-            "CleanApp.APPLICATION.IServices")
+            "APPLICATION.IServices")
 
     # ── service + mapper in INFRASTRUCTURE ───────────────────────────
 
     def test_service_clean_ns(self):
         _assert_file_contains(str(self.tmp), "./INFRASTRUCTURE/Services/ItemService.cs",
-            "CleanApp.INFRASTRUCTURE.Services")
+            "INFRASTRUCTURE.Services")
 
     def test_mapper_clean_ns(self):
         _assert_file_contains(str(self.tmp), "./INFRASTRUCTURE/Mappers/ItemMappingProfile.cs",
-            "CleanApp.INFRASTRUCTURE.Mappers")
+            "INFRASTRUCTURE.Mappers")
 
     # ── controller in API ────────────────────────────────────────────
 
     def test_controller_clean_ns(self):
         _assert_file_contains(str(self.tmp), "./API/Controllers/ItemController.cs",
-            "CleanApp.API.Controllers")
+            "API.Controllers")
 
     # ── dbcontext in INFRASTRUCTURE ──────────────────────────────────
 
     def test_dbcontext_clean_ns(self):
         _assert_file_contains(str(self.tmp), "./INFRASTRUCTURE/Data/AppDbContext.cs",
-            "CleanApp.INFRASTRUCTURE.Data")
+            "INFRASTRUCTURE.Data")
 
     # ── cross-cutting ────────────────────────────────────────────────
 
