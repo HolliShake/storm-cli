@@ -199,13 +199,17 @@ def resolve_composer():
     return None
 
 
-def run_composer(args, cwd=None):
+def run_composer(args, cwd=None, ignore_platform_reqs=None):
     composer_exe = resolve_composer()
     if composer_exe is None:
         print("ERROR: composer not found. Install Composer and try again.")
         sys.exit(1)
+    cmd = [composer_exe] + args
+    if ignore_platform_reqs:
+        for req in ignore_platform_reqs:
+            cmd.append(f"--ignore-platform-req={req}")
     print(f"  [>] composer {' '.join(args)}")
-    result = subprocess.run([composer_exe] + args, cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"ERROR: composer command failed:")
         print(result.stderr)
@@ -550,23 +554,65 @@ def set_laravel_php_requirements(project_dir):
 
     composer.setdefault("require", {})
     composer["require"]["php"] = "^8.5"
-    if "laravel/framework" in composer.get("require", {}):
-        composer["require"]["laravel/framework"] = "^12.0"
+
+    # Detect the installed Laravel version from composer.lock, fall back to ^13.0
+    lock_path = os.path.join(project_dir, "composer.lock")
+    laravel_constraint = "^13.0"
+    if os.path.exists(lock_path):
+        with open(lock_path, "r", encoding="utf-8") as f:
+            lock = json.load(f)
+        for pkg in lock.get("packages", []):
+            if pkg.get("name") == "laravel/framework":
+                version = pkg.get("version", "")
+                match = re.search(r'^(\d+)\.', version)
+                if match:
+                    laravel_constraint = f"^{match.group(1)}.0"
+                break
+    composer["require"]["laravel/framework"] = laravel_constraint
 
     with open(composer_path, "w", encoding="utf-8") as f:
         json.dump(composer, f, indent=4)
-    print("  [ok] composer.json updated: php ^8.5, laravel ^12.0")
+    print(f"  [ok] composer.json updated: php ^8.5, laravel {laravel_constraint}")
+
+
+def merge_temp_project(temp_dir, target_dir):
+    """Move all files from temp_dir into target_dir, then remove temp_dir."""
+    for item in os.listdir(temp_dir):
+        src = os.path.join(temp_dir, item)
+        dst = os.path.join(target_dir, item)
+        if os.path.isdir(src):
+            if os.path.exists(dst):
+                shutil.rmtree(dst)
+            shutil.move(src, dst)
+        else:
+            if os.path.exists(dst):
+                os.remove(dst)
+            shutil.move(src, dst)
+    os.rmdir(temp_dir)
 
 
 def init_laravel_project(config, project_dir):
-    print("\nCreating Laravel project...")
-    run_composer(["create-project", "laravel/laravel", project_dir, "--prefer-dist"])
+    temp_dir = os.path.join(project_dir, "__laravel_temp__")
+    print("\nCreating Laravel project in temporary directory...")
+    run_composer([
+        "create-project", "laravel/laravel", temp_dir, "--prefer-dist",
+        "--ignore-platform-req=ext-fileinfo",
+    ])
+    print("  [ok] Laravel project created")
+
+    merge_temp_project(temp_dir, project_dir)
+    print("  [ok] project files merged into root")
+
     create_config_dirs(config, project_dir)
 
     set_laravel_php_requirements(project_dir)
 
     print(f"\nInstalling Composer packages...")
-    run_composer(["require"] + COMPOSER_PACKAGES, cwd=project_dir)
+    run_composer(
+        ["require"] + COMPOSER_PACKAGES,
+        cwd=project_dir,
+        ignore_platform_reqs=["ext-fileinfo", "ext-exif", "ext-gd", "ext-imagick"],
+    )
 
     write_config(config, project_dir)
 
