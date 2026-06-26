@@ -61,17 +61,18 @@ def check_laravel_prerequisites():
         result = subprocess.run([php_path, "-v"], capture_output=True, text=True)
         if result.returncode == 0:
             first_line = result.stdout.splitlines()[0]
-            match = re.search(r'PHP\s+(\d+)\.', first_line)
+            match = re.search(r'PHP\s+(\d+)\.(\d+)', first_line)
             if match:
                 major = int(match.group(1))
-                if major < 12:
-                    missing.append("php 12+ (found php " + first_line.split()[1] if len(first_line.split()) > 1 else "older version)")
+                minor = int(match.group(2))
+                if major < 8 or (major == 8 and minor < 5):
+                    missing.append("php 8.5+ (found php " + first_line.split()[1] if len(first_line.split()) > 1 else "older version)")
             else:
                 missing.append("php (unable to determine version)")
         else:
             missing.append("php (not working)")
 
-    if shutil.which("composer") is None:
+    if resolve_composer() is None:
         missing.append("composer")
 
     if missing:
@@ -81,7 +82,7 @@ def check_laravel_prerequisites():
         print("\nInstall the missing dependencies and try again.")
         sys.exit(1)
 
-    print("  [ok] php 12+")
+    print("  [ok] php 8.5+")
     print("  [ok] composer")
 
 
@@ -189,9 +190,22 @@ def run_dotnet(args, cwd=None):
         sys.exit(1)
 
 
+def resolve_composer():
+    """Find the composer executable path."""
+    for name in ["composer", "composer.bat", "composer.phar"]:
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
 def run_composer(args, cwd=None):
+    composer_exe = resolve_composer()
+    if composer_exe is None:
+        print("ERROR: composer not found. Install Composer and try again.")
+        sys.exit(1)
     print(f"  [>] composer {' '.join(args)}")
-    result = subprocess.run(["composer"] + args, cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run([composer_exe] + args, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"ERROR: composer command failed:")
         print(result.stderr)
@@ -524,10 +538,32 @@ COMPOSER_PACKAGES = [
 ]
 
 
+def set_laravel_php_requirements(project_dir):
+    """Set PHP ^8.5 and Laravel ^12.0 requirements in composer.json."""
+    composer_path = os.path.join(project_dir, "composer.json")
+    if not os.path.exists(composer_path):
+        print("  [!!] composer.json not found, skipping version requirements")
+        return
+
+    with open(composer_path, "r", encoding="utf-8") as f:
+        composer = json.load(f)
+
+    composer.setdefault("require", {})
+    composer["require"]["php"] = "^8.5"
+    if "laravel/framework" in composer.get("require", {}):
+        composer["require"]["laravel/framework"] = "^12.0"
+
+    with open(composer_path, "w", encoding="utf-8") as f:
+        json.dump(composer, f, indent=4)
+    print("  [ok] composer.json updated: php ^8.5, laravel ^12.0")
+
+
 def init_laravel_project(config, project_dir):
     print("\nCreating Laravel project...")
     run_composer(["create-project", "laravel/laravel", project_dir, "--prefer-dist"])
     create_config_dirs(config, project_dir)
+
+    set_laravel_php_requirements(project_dir)
 
     print(f"\nInstalling Composer packages...")
     run_composer(["require"] + COMPOSER_PACKAGES, cwd=project_dir)
