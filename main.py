@@ -441,12 +441,12 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Scrutor;
 using Scalar.AspNetCore;
-using $$NAMESPACE$$.DOMAIN.Models;
-using $$NAMESPACE$$.APPLICATION.IServices;
-using $$NAMESPACE$$.APPLICATION.Dtos.Shared;
-using $$NAMESPACE$$.INFRASTRUCTURE.Data;
-using $$NAMESPACE$$.INFRASTRUCTURE.Services;
-using $$NAMESPACE$$.INFRASTRUCTURE.Mappers;
+using DOMAIN.Models;
+using APPLICATION.IServices;
+using APPLICATION.Dtos.Shared;
+using INFRASTRUCTURE.Data;
+using INFRASTRUCTURE.Services;
+using INFRASTRUCTURE.Mappers;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -497,7 +497,7 @@ builder.Services.AddAutoMapper(cfg =>
 builder.Services.Scan(scan => scan
     .FromAssemblyOf<UserService>()
     .AddClasses(classes => classes
-        .InNamespaces("$$NAMESPACE$$.INFRASTRUCTURE.Services")
+        .InNamespaces("INFRASTRUCTURE.Services")
         .AssignableTo(typeof(GenericService<,,,>)))
     .AsImplementedInterfaces()
     .WithScopedLifetime());
