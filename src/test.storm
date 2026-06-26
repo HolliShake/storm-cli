@@ -3,7 +3,7 @@
 
 enum Options {
     ITEM = "DOG",
-    ITEM2 = "Hello" + World!"
+    ITEM2 = "Hello" + "World!"
 }
 
 table Product {
@@ -15,5 +15,5 @@ table Product {
 }
 
 table User {
-    id uuid pk;
+    id: uuid pk;
 }

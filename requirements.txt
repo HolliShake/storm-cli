@@ -1,2 +1,2 @@
-PyInstaller
+# Runtime dependencies (installed via `pip install storm-cli`)
 colorama

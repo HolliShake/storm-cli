@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "storm-cli"
+version = "1.0.0"
+description = "Declarative API scaffold: define your data model in .storm format and generate complete C# (.NET) or PHP (Laravel) backends with zero boilerplate"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Philipp Andrew Redondo", email = "hollishake@pm.me"},
+]
+keywords = [
+    "api", "scaffold", "code-generation", "dotnet", "csharp",
+    "laravel", "php", "webapi", "rest", "cli", "storm",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Build Tools",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "colorama>=0.4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/HolliShake/storm-cli"
+Repository = "https://github.com/HolliShake/storm-cli"
+Issues = "https://github.com/HolliShake/storm-cli/issues"
+
+[project.scripts]
+storm = "main:main"
+
+[tool.setuptools]
+packages = ["src"]
+py-modules = ["main"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+src = ["*.py"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
