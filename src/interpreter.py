@@ -749,11 +749,12 @@ public class {table_name}Controller : GenericController<{table_name}, {table_nam
 
     def _generate_appdbcontext(self, namespace, model_ns):
         usings = f"""\
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using {model_ns};
 """
-        buf = [usings, f"namespace {namespace};", "", "public class AppDbContext : IdentityDbContext", "{"]
+        buf = [usings, f"namespace {namespace};", "", "public class AppDbContext : IdentityDbContext<User, IdentityRole<Guid>, Guid>", "{"]
         buf.append("    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }")
         buf.append("")
 
