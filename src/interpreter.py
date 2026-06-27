@@ -460,13 +460,13 @@ class Interpreter(Parser):
         buf.append("}")
         return "\n".join(buf)
 
-    def _generate_response_dto(self, table_node, namespace, enum_ns=""):
+    def _generate_response_dto(self, table_node, namespace, dto_ns, enum_ns=""):
         name = table_node.a.value
         dto_name = f"{name}ResponseDto"
 
         usings = ""
         if enum_ns and self._table_uses_enums(table_node):
-            usings = f"using {enum_ns};\n\n"
+            usings = f"using {enum_ns};\n"
 
         # collect field names to detect FK-id collisions
         all_names = set()
@@ -475,6 +475,22 @@ class Interpreter(Parser):
             all_names.add(self._pascal_case(fn.a.value))
             fn = fn.next
 
+        # collect FK DTO namespace usings
+        fk_usings = set()
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.tables:
+                fk_usings.add(f"using {dto_ns}.{type_name}Dto;")
+            f = f.next
+
+        if fk_usings:
+            for u in sorted(fk_usings):
+                usings += u + "\n"
+        if usings:
+            usings += "\n"
+
         buf = [usings + f"namespace {namespace};", "", f"public class {dto_name}", "{"]
 
         f = table_node.b
@@ -482,10 +498,11 @@ class Interpreter(Parser):
             field_name = self._pascal_case(f.a.value)
             cs_type = self._field_csharp_type(f)
             if isinstance(cs_type, tuple):
-                ref_pk_type, _ = cs_type
+                ref_pk_type, ref_name = cs_type
                 fk_name = f"{field_name}Id"
                 if fk_name not in all_names:
                     buf.append(f"    public {ref_pk_type} {fk_name} {{ get; set; }}")
+                buf.append(f"    public {ref_name}ResponseSimplifiedDto? {field_name} {{ get; set; }}")
             else:
                 buf.append(f"    public {cs_type} {field_name} {{ get; set; }}")
             f = f.next
@@ -493,7 +510,7 @@ class Interpreter(Parser):
         buf.append("}")
         return "\n".join(buf)
 
-    def _generate_response_simplified_dto(self, table_node, namespace, enum_ns=""):
+    def _generate_response_simplified_dto(self, table_node, namespace, dto_ns, enum_ns=""):
         name = table_node.a.value
         pk = self._get_pk_field(table_node)
         pk_name = self._pascal_case(pk.a.value) if pk else "Id"
@@ -502,19 +519,51 @@ class Interpreter(Parser):
 
         usings = ""
         if enum_ns and self._table_uses_enums(table_node):
-            usings = f"using {enum_ns};\n\n"
+            usings = f"using {enum_ns};\n"
+
+        # collect field names to detect FK-id collisions
+        all_names = set()
+        fn = table_node.b
+        while fn:
+            all_names.add(self._pascal_case(fn.a.value))
+            fn = fn.next
+
+        # collect FK DTO namespace usings
+        fk_usings = set()
+        f = table_node.b
+        while f:
+            type_node = f.b
+            type_name = type_node.value.rstrip("?")
+            if type_name in self.tables:
+                fk_usings.add(f"using {dto_ns}.{type_name}Dto;")
+            f = f.next
+
+        if fk_usings:
+            for u in sorted(fk_usings):
+                usings += u + "\n"
+        if usings:
+            usings += "\n"
 
         buf = [usings + f"namespace {namespace};", "", f"public class {dto_name}", "{"]
         buf.append(f"    public {pk_type} {pk_name} {{ get; set; }}")
 
-        for nf in ["Name", "Title", "Label"]:
-            f = table_node.b
-            while f:
-                if self._pascal_case(f.a.value) == nf:
-                    cs_type = self._field_csharp_type(f)
-                    buf.append(f"    public {cs_type[0] if isinstance(cs_type, tuple) else cs_type} {nf} {{ get; set; }}")
-                    break
+        f = table_node.b
+        while f:
+            field_name = self._pascal_case(f.a.value)
+            # skip the PK field since it's already emitted
+            if field_name == pk_name:
                 f = f.next
+                continue
+            cs_type = self._field_csharp_type(f)
+            if isinstance(cs_type, tuple):
+                ref_pk_type, ref_name = cs_type
+                fk_name = f"{field_name}Id"
+                if fk_name not in all_names:
+                    buf.append(f"    public {ref_pk_type} {fk_name} {{ get; set; }}")
+                buf.append(f"    public {ref_name}ResponseSimplifiedDto? {field_name} {{ get; set; }}")
+            else:
+                buf.append(f"    public {cs_type} {field_name} {{ get; set; }}")
+            f = f.next
 
         buf.append("}")
         return "\n".join(buf)
@@ -2298,10 +2347,10 @@ app.Run();
             req_code = self._generate_request_dto(node, table_dto_ns, enum_ns)
             self._write_file(output_dir, table_dto_path, f"{name}RequestDto.cs", req_code)
 
-            res_code = self._generate_response_dto(node, table_dto_ns, enum_ns)
+            res_code = self._generate_response_dto(node, table_dto_ns, dto_ns, enum_ns)
             self._write_file(output_dir, table_dto_path, f"{name}ResponseDto.cs", res_code)
 
-            simp_code = self._generate_response_simplified_dto(node, table_dto_ns, enum_ns)
+            simp_code = self._generate_response_simplified_dto(node, table_dto_ns, dto_ns, enum_ns)
             self._write_file(output_dir, table_dto_path, f"{name}ResponseSimplifiedDto.cs", simp_code)
 
             isvc_code = self._generate_iservice(name, iservice_ns, pk_type, iservice_ns, model_ns, table_dto_ns, pagination_ns, enum_ns)
